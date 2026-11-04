@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
   <div id="loginScreen" class="login-screen">
@@ -38,8 +39,9 @@
       <nav id="mainNav">
         <button class="nav-item active" data-page="dashboard"><span class="nav-icon">⌂</span>Dashboard</button>
         <button class="nav-item" data-page="inventory"><span class="nav-icon">▦</span>Inventory</button>
-        <button class="nav-item" data-page="transactions"><span class="nav-icon">⇄</span>Transactions</button>
+        <button class="nav-item" data-page="transactions"><span class="nav-icon">⇄</span>Borrow/Return</button>
         <button class="nav-item" data-page="requests"><span class="nav-icon">▤</span>Requests <span id="requestNavCount" class="nav-count">0</span></button>
+        <button class="nav-item" data-page="history"><span class="nav-icon">◷</span>History</button>
         <button class="nav-item" data-page="reports"><span class="nav-icon">▥</span>Reports</button>
       </nav>
       <div class="sidebar-bottom">
@@ -67,34 +69,40 @@
           </div>
           <div class="stat-grid">
             <article class="stat-card"><div class="stat-top"><span>Total items</span><span class="stat-icon blue">▦</span></div><strong id="statTotal">0</strong><small class="stat-foot">Unique inventory records</small></article>
-            <article class="stat-card"><div class="stat-top"><span>Units in stock</span><span class="stat-icon green">✓</span></div><strong id="statStock">0</strong><small class="stat-foot">Across all categories</small></article>
-            <article class="stat-card"><div class="stat-top"><span>Low stock</span><span class="stat-icon amber">!</span></div><strong id="statLow">0</strong><small class="stat-foot">At or below reorder level</small></article>
+            <article class="stat-card"><div class="stat-top"><span>Available items</span><span class="stat-icon green">✓</span></div><strong id="statStock">0</strong><small class="stat-foot">Ready to borrow</small></article>
+            <article class="stat-card"><div class="stat-top"><span>Borrowed items</span><span class="stat-icon amber">⇄</span></div><strong id="statLow">0</strong><small class="stat-foot">Currently borrowed out</small></article>
             <article class="stat-card"><div class="stat-top"><span>Pending requests</span><span class="stat-icon violet">▤</span></div><strong id="statPending">0</strong><small class="stat-foot">Awaiting review</small></article>
           </div>
           <div class="dashboard-grid">
-            <article class="panel chart-panel"><div class="panel-heading"><div><h2>Stock overview</h2><p>Current quantity by stock condition</p></div><span class="subtle-tag">Live data</span></div><div class="chart-holder"><canvas id="stockChart"></canvas></div><div class="chart-legend"><span><i class="dot blue-dot"></i>In stock</span><span><i class="dot amber-dot"></i>Low stock</span><span><i class="dot red-dot"></i>Out of stock</span></div></article>
+            <article class="panel chart-panel"><div class="panel-heading"><div><h2>Availability overview</h2><p>Current items by availability status</p></div><span class="subtle-tag">Live data</span></div><div class="chart-holder"><canvas id="stockChart"></canvas></div><div class="chart-legend"><span><i class="dot green-dot"></i>Available</span><span><i class="dot red-dot"></i>Borrowed</span></div></article>
             <article class="panel"><div class="panel-heading"><div><h2>Top categories</h2><p>Items grouped by category</p></div><button class="text-btn" data-go="inventory">View inventory →</button></div><div id="categoryList" class="category-list"><div class="empty-state">No inventory data yet.</div></div></article>
-            <article class="panel activity-panel"><div class="panel-heading"><div><h2>Recent transactions</h2><p>Latest stock movements</p></div><button class="text-btn" data-go="transactions">View all →</button></div><div id="recentTransactions" class="activity-list"><div class="empty-state">No transactions recorded.</div></div></article>
-            <article class="panel quick-panel"><div class="panel-heading"><div><h2>Quick actions</h2><p>Common inventory tasks</p></div></div><button class="quick-action" data-go="inventory"><span class="quick-symbol blue">＋</span><span><strong>Add inventory item</strong><small>Create a new stock record</small></span><b>→</b></button><button class="quick-action" data-go="transactions"><span class="quick-symbol green">⇄</span><span><strong>Record transaction</strong><small>Stock in or stock out</small></span><b>→</b></button><button class="quick-action" data-go="requests"><span class="quick-symbol violet">▤</span><span><strong>Review requests</strong><small>Process school supply requests</small></span><b>→</b></button></article>
+            <article class="panel activity-panel"><div class="panel-heading"><div><h2>Recent borrow/return</h2><p>Latest borrowing and return activity</p></div><button class="text-btn" data-go="transactions">View all →</button></div><div id="recentTransactions" class="activity-list"><div class="empty-state">No borrow/return activity yet.</div></div></article>
+            <article class="panel quick-panel"><div class="panel-heading"><div><h2>Quick actions</h2><p>Common inventory tasks</p></div></div><button class="quick-action" data-go="inventory"><span class="quick-symbol blue">＋</span><span><strong>Add inventory item</strong><small>Create a new stock record</small></span><b>→</b></button><button class="quick-action" data-go="transactions"><span class="quick-symbol green">⇄</span><span><strong>Borrow / Return item</strong><small>Borrow an item or process a return</small></span><b>→</b></button><button class="quick-action" data-go="requests"><span class="quick-symbol violet">▤</span><span><strong>Review requests</strong><small>Process school supply requests</small></span><b>→</b></button></article>
           </div>
         </section>
 
         <section id="inventoryPage" class="page">
-          <div class="page-heading"><div><p class="eyebrow">STOCK MANAGEMENT</p><h1>Inventory</h1><p class="muted">Manage school supplies, equipment, and stock levels.</p></div><button id="addItemBtn" class="primary-btn">＋ Add item</button></div>
-          <div class="toolbar"><div class="search-box">⌕ <input id="inventorySearch" placeholder="Search item, code, or category..." /></div><select id="categoryFilter"><option value="">All categories</option></select><select id="stockFilter"><option value="">All stock levels</option><option value="in">In stock</option><option value="low">Low stock</option><option value="out">Out of stock</option></select></div>
-          <article class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>ITEM</th><th>CATEGORY</th><th>QUANTITY</th><th>REORDER LEVEL</th><th>LOCATION</th><th>STATUS</th><th></th></tr></thead><tbody id="inventoryBody"><tr><td colspan="7" class="empty-state">Loading inventory...</td></tr></tbody></table></div><div class="table-footer" id="inventoryFooter"></div></article>
+          <div class="page-heading"><div><p class="eyebrow">STOCK MANAGEMENT</p><h1>Inventory</h1><p class="muted">Manage school supplies, equipment, and stock levels.</p></div><div class="heading-actions"><button id="bulkDeleteBtn" class="danger-btn hidden">Delete selected (0)</button><button id="importExcelBtn" class="secondary-btn">↑ Import Excel</button><button id="addItemBtn" class="primary-btn">＋ Add item</button></div></div>
+          <div class="toolbar"><div class="search-box">⌕ <input id="inventorySearch" placeholder="Search item, property no., location, accountable person..." /></div><select id="categoryFilter"><option value="">All categories</option></select><select id="stockFilter"><option value="">All statuses</option><option value="available">Available</option><option value="borrowed">Borrowed</option></select><input type="date" id="dateFilter" title="Filter by date entered" /><span id="searchHint" class="search-hint-pill hidden"></span></div>
+          <article class="panel table-panel"><div class="table-scroll"><table><thead><tr id="inventoryHeadRow"><th class="check-col"><input type="checkbox" id="selectAllInventory" title="Select all visible items" /></th><th>NO</th><th>DATE ENTERED</th><th>ENTERED BY</th><th>SCHOOL ID</th><th>DISTRICT</th><th>SCHOOL NAME</th><th>OLD PROPERTY NO.</th><th>NEW PROPERTY NO.</th><th>SERIAL NO. / TITLE NO.</th><th>MODEL NO.</th><th>DATE ACQUIRED (mm/dd/yyyy)</th><th>UACS</th><th>ACCOUNT CATEGORY</th><th>ACCOUNT CLASSIFICATION</th><th>ACCOUNT TITLE</th><th>ARTICLE / ITEM</th><th>DESCRIPTION</th><th>CATEGORY</th><th>UNIT OF MEASURE</th><th>UNIT VALUE</th><th>QTY (PROPERTY CARD)</th><th>QTY (PHYSICAL COUNT)</th><th>LOCATION / WHEREABOUTS</th><th>CONDITION</th><th>USEFUL LIFE</th><th>REMARKS</th><th>AVAILABLE DOCUMENTS</th><th>FUND SOURCE</th><th>FUND</th><th>ACCOUNTABLE HRIS-ID</th><th>ACCOUNTABLE PERSON</th><th>STATUS</th><th class="actions-col">ACTIONS</th></tr></thead><tbody id="inventoryBody"><tr><td colspan="34" class="empty-state">Loading inventory...</td></tr></tbody></table></div><div class="table-footer" id="inventoryFooter"></div></article>
         </section>
 
         <section id="transactionsPage" class="page">
-          <div class="page-heading"><div><p class="eyebrow">STOCK MOVEMENT</p><h1>Transactions</h1><p class="muted">Track every stock-in and stock-out activity.</p></div><button id="addTransactionBtn" class="primary-btn">＋ Record transaction</button></div>
-          <div class="toolbar"><div class="search-box">⌕ <input id="transactionSearch" placeholder="Search item or reference..." /></div><select id="transactionFilter"><option value="">All transactions</option><option value="in">Stock in</option><option value="out">Stock out</option></select></div>
-          <article class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>DATE</th><th>ITEM</th><th>TYPE</th><th>QUANTITY</th><th>REFERENCE / NOTES</th><th>RECORDED BY</th></tr></thead><tbody id="transactionsBody"></tbody></table></div></article>
+          <div class="page-heading"><div><p class="eyebrow">ITEM LENDING</p><h1>Borrow/Return</h1><p class="muted">Track borrowed items, who borrowed them, reason for borrowing, and expected return dates.</p></div><div class="heading-actions"><button id="returnItemBtn" class="secondary-btn">↩ Return</button><button id="borrowItemBtn" class="primary-btn">＋ Borrow</button></div></div>
+          <div class="toolbar"><div class="search-box">⌕ <input id="transactionSearch" placeholder="Search borrowed item, borrower name, or reason..." /></div><select id="transactionFilter"><option value="borrowed">Currently borrowed</option><option value="all">All borrow &amp; return records</option><option value="returned">Returned items</option></select></div>
+          <article class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>ITEM</th><th>WHO BORROWED</th><th>REASON FOR BORROWING</th><th>DATE BORROWED</th><th>EXPECTED DATE TO RETURN</th><th>STATUS</th><th class="actions-col">ACTION</th></tr></thead><tbody id="transactionsBody"></tbody></table></div></article>
         </section>
 
         <section id="requestsPage" class="page">
           <div class="page-heading"><div><p class="eyebrow">SUPPLY WORKFLOW</p><h1>Requests</h1><p class="muted">Review and process requests for school inventory.</p></div><button id="newRequestBtn" class="primary-btn">＋ New request</button></div>
           <div class="toolbar"><div class="search-box">⌕ <input id="requestSearch" placeholder="Search requester or item..." /></div><select id="requestFilter"><option value="">All requests</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="fulfilled">Fulfilled</option><option value="rejected">Rejected</option></select></div>
           <article class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>REQUESTED</th><th>REQUESTER</th><th>ITEM</th><th>QUANTITY</th><th>STATUS</th><th>NOTE</th><th>ACTION</th></tr></thead><tbody id="requestsBody"></tbody></table></div></article>
+        </section>
+
+        <section id="historyPage" class="page">
+          <div class="page-heading"><div><p class="eyebrow">AUDIT TRAIL</p><h1>History Changes</h1><p class="muted">Track who added, imported, edited, or deleted inventory records.</p></div></div>
+          <div class="toolbar"><div class="search-box">⌕ <input id="historySearch" placeholder="Search user, item, property no., or details..." /></div><select id="historyFilter"><option value="">All actions</option><option value="added">Added</option><option value="imported">Imported</option><option value="updated">Edited</option><option value="deleted">Deleted</option></select></div>
+          <article class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>DATE & TIME</th><th>ACTION</th><th>ITEM / RECORD</th><th>PROPERTY NO.</th><th>DETAILS</th><th>PERFORMED BY</th></tr></thead><tbody id="historyBody"><tr><td colspan="6" class="empty-state">No history logs yet.</td></tr></tbody></table></div></article>
         </section>
 
         <section id="reportsPage" class="page">
