@@ -7,7 +7,7 @@ const hasConfig = SUPABASE_URL.startsWith("https://") && !SUPABASE_URL.includes(
 const db = hasConfig ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 
 const $ = (id) => document.getElementById(id);
-const state = { user:null, profile:null, inventory:[], transactions:[], requests:[], history:[], activeBorrows:new Map(), borrowRecords:[], chart:null, editingId:null, modalType:null, importRows:[], selectedIds:new Set(), visibleIds:[], deleteIds:[], selectedBorrowItemId:null, selectedReturnItemId:null };
+const state = { user:null, profile:null, inventory:[], transactions:[], requests:[], history:[], maintenance:[], accessRequests:[], profilesList:[], activeBorrows:new Map(), borrowRecords:[], chart:null, editingId:null, modalType:null, importRows:[], selectedIds:new Set(), visibleIds:[], deleteIds:[], selectedBorrowItemId:null, selectedReturnItemId:null, selectedMaintenanceItemId:null };
 const today = new Date();
 $("todayLabel").textContent = today.toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
 $("year").textContent = today.getFullYear();
@@ -110,7 +110,24 @@ function dateAcquiredSearchTokens(v){
 }
 function role(){return state.profile?.role||"requester"}
 function actorName(){const n=state.profile?.full_name,e=state.user?.email;return n&&e&&n!==e?`${n} (${e})`:(n||e||"User")}
-function canManage(){return ["admin","staff"].includes(role())}
+function isAdmin(){return ["admin","developer"].includes(role())}
+function isStaff(){return role()==="staff"}
+function isTeacher(){return role()==="teacher"}
+function canManage(){return ["admin","developer","staff"].includes(role())}
+function isPending(){return ["requester","pending"].includes(role())}
+function getRequisitionerName(r){
+ if(r?.requisitioner_name && String(r.requisitioner_name).trim()) return String(r.requisitioner_name).trim();
+ const note=String(r?.note||"");
+ if(note.startsWith("[Requisitioner:")){
+  const m=note.match(/^\[Requisitioner:\s*([^\]]+)\]/);
+  if(m&&m[1]) return m[1].trim();
+ }
+ return r?.profiles?.full_name || "User";
+}
+function cleanRequestNote(note=""){
+ if(!note) return "—";
+ return String(note).replace(/^\[Requisitioner:\s*[^\]]+\]\s*/,"").trim() || "—";
+}
 function parseBorrowMeta(t){
  let borrower="",expected_return="",borrowed_date=toISODate(t.created_at);
  const raw=String(t.reference||"").trim();
@@ -138,6 +155,20 @@ function parseBorrowMeta(t){
   inventory_items:t.inventory_items
  };
 }
+function isOverdueDate(expectedDateStr, status="borrowed"){
+ if(status!=="borrowed"||!expectedDateStr)return false;
+ const p=getDateAcquiredParts(expectedDateStr);
+ if(!p)return false;
+ const exp=new Date(p.y, p.m-1, p.d, 23, 59, 59);
+ return Date.now() > exp.getTime();
+}
+function getOverdueDays(expectedDateStr){
+ const p=getDateAcquiredParts(expectedDateStr);
+ if(!p)return 0;
+ const exp=new Date(p.y, p.m-1, p.d, 23, 59, 59);
+ const diff=Date.now() - exp.getTime();
+ return diff>0 ? Math.ceil(diff/86400000) : 0;
+}
 function rebuildBorrowState(){
  const activeMap=new Map();
  const seen=new Set();
@@ -149,21 +180,36 @@ function rebuildBorrowState(){
   seen.add(t.item_id);
   if(t.type==="out"){
    const isCurrentlyBorrowed=isLatest;
-   const entry={...meta,status:isCurrentlyBorrowed?"borrowed":"returned"};
+   const isOver=isCurrentlyBorrowed && isOverdueDate(meta.expected_return, "borrowed");
+   const overdueDays=isOver ? getOverdueDays(meta.expected_return) : 0;
+   const entry={...meta,status:isCurrentlyBorrowed?"borrowed":"returned",is_overdue:isOver,overdue_days:overdueDays};
    if(isCurrentlyBorrowed)activeMap.set(t.item_id,entry);
    records.push(entry);
   }
  }
  state.activeBorrows=activeMap;
  state.borrowRecords=records;
+ state.overdueCount=[...activeMap.values()].filter(x=>x.is_overdue).length;
 }
 function getActiveBorrow(itemId){return state.activeBorrows?.get(itemId)||null}
 function statusFor(item){return getActiveBorrow(item.id)?"borrowed":"available"}
-function statusBadge(s){const map={available:["Available","available"],borrowed:["Borrowed","borrowed"],returned:["Returned","returned"],in:["Available","available"],low:["Low stock","low-stock"],out:["Borrowed","borrowed"],pending:["Pending","pending"],approved:["Approved","approved"],fulfilled:["Fulfilled","fulfilled"],rejected:["Rejected","rejected"],added:["Added","in-stock"],imported:["Imported","in-stock"],updated:["Edited","low-stock"],deleted:["Deleted","out-of-stock"]};const x=map[s]||[s,s];return `<span class="status ${x[1]}">${x[0]}</span>`}
+function statusBadge(s){const map={available:["Available","available"],borrowed:["Borrowed","borrowed"],overdue:["Overdue","overdue"],returned:["Returned","returned"],in:["Available","available"],low:["Low stock","low-stock"],out:["Borrowed","borrowed"],pending:["Pending","pending"],approved:["Approved","approved"],fulfilled:["Fulfilled","fulfilled"],rejected:["Rejected","rejected"],added:["Added","in-stock"],imported:["Imported","in-stock"],updated:["Edited","low-stock"],deleted:["Deleted","out-of-stock"],in_repair:["Under service","low-stock"],repaired:["Repaired & Restored","in-stock"],condemned:["Condemned","out-of-stock"],teacher:["Teacher","teacher"],staff:["Staff","staff"]};const x=map[s]||[s,s];return `<span class="status ${x[1]}">${x[0]}</span>`}
 function itemIcon(category=""){const c=category.toLowerCase();if(c.includes("it")||c.includes("computer"))return "▣";if(c.includes("office")||c.includes("paper")||c.includes("book"))return "▤";if(c.includes("lab"))return "⚗";if(c.includes("furniture"))return "▥";if(c.includes("machin")||c.includes("sport"))return "◈";return "□"}
-function setPage(name){const titles={dashboard:"Dashboard",inventory:"Inventory",transactions:"Borrow/Return",requests:"Requests",history:"History",reports:"Reports"};document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));$(name+"Page").classList.add("active");document.querySelectorAll(".nav-item[data-page]").forEach(b=>b.classList.toggle("active",b.dataset.page===name));$("crumb").textContent=titles[name]||(name[0].toUpperCase()+name.slice(1));$("sidebar").classList.remove("open");if(name==="reports")renderReports();if(name==="history")renderHistory()}
-function showApp(user,profile){state.user=user;state.profile=profile;$("loginScreen").classList.add("hidden");$("app").classList.remove("hidden");const display=profile?.full_name||user.email?.split("@")[0]||"User";$("userName").textContent=display;$("welcomeName").textContent=display.split(" ")[0];$("userRole").textContent=role();$("avatar").textContent=display[0].toUpperCase();document.querySelectorAll('[data-go="inventory"]').forEach(b=>b.style.display=canManage()?"":"none");$("addItemBtn").style.display=canManage()?"":"none";$("importExcelBtn").style.display=canManage()?"":"none";if($("borrowItemBtn"))$("borrowItemBtn").style.display=canManage()?"":"none";if($("returnItemBtn"))$("returnItemBtn").style.display=canManage()?"":"none";$("requestNavCount").style.display="";loadAll()}
-async function loadProfile(user){const fallback={id:user.id,full_name:user.email?.split("@")[0]||"User",role:"requester"};const {data,error}=await db.from("profiles").select("*").eq("id",user.id).maybeSingle();if(error)throw error;if(!data){const {data:created,error:e}=await db.from("profiles").insert(fallback).select().single();if(e)return fallback;return created}return data}
+function setPage(name){const titles={dashboard:"Dashboard",inventory:"Inventory",transactions:"Borrow/Return",requests:"Supply Requisition",maintenance:"Maintenance & Repairs",history:"History",reports:"Reports",access_requests:"Access Requests"};document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));$(name+"Page").classList.add("active");document.querySelectorAll(".nav-item[data-page]").forEach(b=>b.classList.toggle("active",b.dataset.page===name));$("crumb").textContent=titles[name]||(name[0].toUpperCase()+name.slice(1));$("sidebar").classList.remove("open");if(name==="reports")renderReports();if(name==="history")renderHistory();if(name==="maintenance")renderMaintenance();if(name==="access_requests")renderAccessRequests();}
+function showApp(user,profile){state.user=user;state.profile=profile;$("loginScreen").classList.add("hidden");$("app").classList.remove("hidden");const display=profile?.full_name||user.email?.split("@")[0]||"User";$("userName").textContent=display;$("welcomeName").textContent=display.split(" ")[0];const roleTitle=role()==="admin"?"Administrator":role()==="developer"?"Developer / Admin":role()==="staff"?"Staff Custodian":"Teacher";$("userRole").textContent=roleTitle;$("avatar").textContent=display[0].toUpperCase();document.querySelectorAll('[data-go="inventory"]').forEach(b=>b.style.display=canManage()?"":"none");$("addItemBtn").style.display=canManage()?"":"none";$("importExcelBtn").style.display=canManage()?"":"none";if($("borrowItemBtn"))$("borrowItemBtn").style.display=canManage()?"":"none";if($("returnItemBtn"))$("returnItemBtn").style.display=canManage()?"":"none";if($("accessRequestsNavItem"))$("accessRequestsNavItem").classList.toggle("hidden",!isAdmin());$("requestNavCount").style.display="";loadAll()}
+async function loadProfile(user){
+ const fallback={id:user.id,full_name:user.email?.split("@")[0]||"User",role:"admin"};
+ try{
+  const {data,error}=await db.from("profiles").select("*").eq("id",user.id).maybeSingle();
+  if(!error&&data)return data;
+  const {data:created,error:e}=await db.from("profiles").insert({id:user.id,full_name:fallback.full_name,role:"requester"}).select().maybeSingle();
+  if(!e&&created)return created;
+  return fallback;
+ }catch(err){
+  console.warn("loadProfile notice:",err.message);
+  return fallback;
+ }
+}
 async function logAudit(entries){
  try{
   const list=(Array.isArray(entries)?entries:[entries]).map(e=>({action:e.action,item_name:e.item_name||"Inventory item",item_code:e.item_code||null,details:e.details||null,actor_id:state.user?.id||null,actor_name:actorName()}));
@@ -173,16 +219,18 @@ async function logAudit(entries){
 }
 async function loadAll(){
  try{
-  const [i,t,r,h,p]=await Promise.all([
+  const [i,t,r,h,p,m]=await Promise.all([
    db.from("inventory_items").select("*").order("name"),
    db.from("stock_transactions").select("*, inventory_items(name, item_code)").order("created_at",{ascending:false}).limit(1000),
    db.from("item_requests").select("*, inventory_items(name, item_code)").order("created_at",{ascending:false}).limit(100),
    db.from("audit_logs").select("*").order("created_at",{ascending:false}).limit(300),
-   db.from("profiles").select("id, full_name, role")
+   db.from("profiles").select("*").order("created_at",{ascending:false}),
+   db.from("maintenance_logs").select("*, inventory_items(name, item_code, location, condition)").order("created_at",{ascending:false}).limit(200)
   ]);
   if(i.error)throw i.error;
   if(t.error)throw t.error;
   if(r.error)throw r.error;
+  state.profilesList=p.data||[];
   const profilesMap=new Map((p.data||[]).map(x=>[x.id,x]));
   state.profilesMap=profilesMap;
   state.inventory=(i.data||[]).map(x=>({
@@ -197,7 +245,17 @@ async function loadAll(){
    ...x,
    profiles:x.requested_by&&profilesMap.has(x.requested_by)?profilesMap.get(x.requested_by):{full_name:"User"}
   }));
+  state.maintenance=(m&&!m.error)?(m.data||[]).map(x=>({
+   ...x,
+   profiles:x.reported_by&&profilesMap.has(x.reported_by)?profilesMap.get(x.reported_by):{full_name:"Staff"}
+  })):[];
   state.history=h.error?[]:(h.data||[]);
+  if(isAdmin()){
+   const acc=await db.from("access_requests").select("*").order("created_at",{ascending:false});
+   state.accessRequests=(acc&&!acc.error)?(acc.data||[]):[];
+  }else{
+   state.accessRequests=[];
+  }
   rebuildBorrowState();
   renderAll();
  }catch(e){
@@ -205,11 +263,40 @@ async function loadAll(){
   console.error(e);
  }
 }
-function renderAll(){renderDashboard();renderInventory();renderTransactions();renderRequests();renderHistory();populateCategoryFilter()}
-function renderDashboard(){const total=state.inventory.length,borrowed=state.inventory.filter(x=>statusFor(x)==="borrowed").length,available=Math.max(0,total-borrowed),pending=state.requests.filter(x=>x.status==="pending").length;$("statTotal").textContent=number(total);$("statStock").textContent=number(available);$("statLow").textContent=number(borrowed);$("statPending").textContent=number(pending);$("requestNavCount").textContent=pending;
+function renderAll(){renderDashboard();renderInventory();renderTransactions();renderRequests();renderMaintenance();if(isAdmin()){populateRegisteredUsersDropdown();renderAccessRequests();}renderHistory();populateCategoryFilter()}
+function renderDashboard(){
+ const total=state.inventory.length,borrowed=state.inventory.filter(x=>statusFor(x)==="borrowed").length,available=Math.max(0,total-borrowed),pending=state.requests.filter(x=>x.status==="pending").length,overdue=state.overdueCount||0;
+ $("statTotal").textContent=number(total);
+ $("statStock").textContent=number(available);
+ $("statLow").textContent=number(borrowed);
+ $("statPending").textContent=number(pending);
+ $("requestNavCount").textContent=pending;
+ const activeMaint=state.maintenance.filter(x=>x.status==="pending"||x.status==="in_repair").length;
+ const navMaint=$("maintenanceNavCount");
+ if(navMaint){
+  if(activeMaint>0){navMaint.textContent=activeMaint;navMaint.classList.remove("hidden")}
+  else{navMaint.classList.add("hidden")}
+ }
+ const pendingAccess=state.accessRequests.filter(x=>x.status==="pending").length;
+ const navAcc=$("accessNavCount");
+ if(navAcc){
+  if(isAdmin()&&pendingAccess>0){navAcc.textContent=`${pendingAccess} new`;navAcc.classList.remove("hidden")}
+  else{navAcc.classList.add("hidden")}
+ }
+ const navBorrow=$("borrowNavCount");
+ if(navBorrow){
+  if(overdue>0){navBorrow.textContent=`${overdue} overdue`;navBorrow.className="nav-count danger-tag";navBorrow.classList.remove("hidden")}
+  else if(borrowed>0){navBorrow.textContent=borrowed;navBorrow.className="nav-count";navBorrow.classList.remove("hidden")}
+  else{navBorrow.classList.add("hidden")}
+ }
+ const borrowedFoot=$("statBorrowedFoot");
+ if(borrowedFoot){
+  borrowedFoot.innerHTML=overdue>0?`<span class="danger-text"><b>⚠ ${overdue} item(s) overdue</b></span>`:"Currently borrowed out";
+ }
  const ctx=$("stockChart");if(state.chart)state.chart.destroy();state.chart=new Chart(ctx,{type:"doughnut",data:{labels:["Available","Borrowed"],datasets:[{data:[available,borrowed],backgroundColor:["#159b70","#df737b"],borderWidth:0,hoverOffset:5}]},options:{responsive:true,maintainAspectRatio:false,cutout:"72%",plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>`${c.label}: ${c.raw} items`}}}}});
  const cats={};state.inventory.forEach(x=>{const c=x.category||"Uncategorized";cats[c]=(cats[c]||0)+1});const sorted=Object.entries(cats).sort((a,b)=>b[1]-a[1]).slice(0,5);$("categoryList").innerHTML=sorted.length?sorted.map(([n,v])=>`<div class="category-row"><span>${esc(n)}</span><div class="bar-track"><div class="bar-fill" style="width:${total?Math.max(4,v/total*100):0}%"></div></div><strong>${v}</strong></div>`).join(""):'<div class="empty-state">No inventory data yet.</div>';
  $("recentTransactions").innerHTML=state.transactions.slice(0,4).length?state.transactions.slice(0,4).map(t=>{const m=parseBorrowMeta(t);return `<div class="activity-row"><div class="activity-icon ${t.type==="in"?"green":"amber"}">${t.type==="in"?"↩":"⇄"}</div><div class="activity-copy"><strong>${esc(t.inventory_items?.name||"Inventory item")}</strong><small>${t.type==="in"?`Returned by ${esc(m.borrower)}`:`Borrowed by ${esc(m.borrower)}`}${t.type==="out"&&m.expected_return?` · Return: ${esc(formatDateAcquired(m.expected_return))}`:""}</small></div><span class="activity-time">${date(t.created_at)}</span></div>`}).join(""):'<div class="empty-state">No borrow/return activity yet.</div>'}
+
 function populateCategoryFilter(){const el=$("categoryFilter"),v=el.value,cats=[...new Set(state.inventory.map(x=>x.category).filter(Boolean))].sort();el.innerHTML='<option value="">All categories</option>'+cats.map(c=>`<option>${esc(c)}</option>`).join("");el.value=cats.includes(v)?v:""}
 const inventoryColumns = [
  { id: "seq_no", label: "NO", search: (x, idx) => String(x.seq_no || (idx + 1)), render: (x, idx) => esc(x.seq_no || (idx + 1)) },
@@ -261,6 +348,8 @@ function renderInventory(){
   return hay.includes(q)&&(!cat||x.category===cat)&&(!sf||statusFor(x)===sf)&&(!df||toISODate(x.created_at)===df);
  });
  state.visibleIds=rows.map(x=>x.id);
+ const clearBtn=$("clearDateFilterBtn");
+ if(clearBtn)clearBtn.classList.toggle("hidden",!df);
 
  let cols=[...inventoryColumns];
  const matchedColIds=new Set();
@@ -318,7 +407,10 @@ function renderTransactions(){
   const itemName=item?.article||item?.name||r.inventory_items?.name||"";
   const itemCode=item?.item_code||r.inventory_items?.item_code||"";
   const hay=`${itemName} ${itemCode} ${r.borrower} ${r.reason} ${dateAcquiredSearchTokens(r.expected_return)} ${dateAcquiredSearchTokens(r.borrowed_date)}`.toLowerCase();
-  const matchFilter=f==="all"||!f||r.status===f;
+  let matchFilter=false;
+  if(f==="overdue")matchFilter=r.status==="borrowed"&&r.is_overdue;
+  else if(f==="all"||!f)matchFilter=true;
+  else matchFilter=r.status===f;
   return hay.includes(q)&&matchFilter;
  });
  $("transactionsBody").innerHTML=rows.length?rows.map(r=>{
@@ -326,18 +418,328 @@ function renderTransactions(){
   const itemName=item?.article||item?.name||r.inventory_items?.name||"Deleted item";
   const itemCode=item?.item_code||r.inventory_items?.item_code||"";
   const loc=item?.location?` · ${item.location}`:"";
+  const isOver=r.status==="borrowed"&&r.is_overdue;
+  const statusDisplay=isOver?`<span class="status overdue">Overdue (${r.overdue_days}d)</span>`:statusBadge(r.status);
+  const returnDateDisplay=isOver
+   ? `<strong>${esc(formatDateAcquired(r.expected_return)||"—")}</strong><br><span class="overdue-pill">⚠ Overdue (${r.overdue_days}d)</span>`
+   : `<strong>${esc(formatDateAcquired(r.expected_return)||"—")}</strong>`;
   return `<tr>
    <td><strong>${esc(itemName)}</strong><br><small>${esc(itemCode||"No Property No.")}${esc(loc)}</small></td>
    <td><strong>${esc(r.borrower)}</strong></td>
    <td>${esc(r.reason||"—")}</td>
    <td>${esc(formatDateAcquired(r.borrowed_date)||date(r.created_at))}</td>
-   <td><strong>${esc(formatDateAcquired(r.expected_return)||"—")}</strong></td>
-   <td>${statusBadge(r.status)}</td>
-   <td class="actions-col">${r.status==="borrowed"&&canManage()?`<button class="mini-btn" data-return-item="${r.item_id}">↩ Return</button>`:"—"}</td>
+   <td>${returnDateDisplay}</td>
+   <td>${statusDisplay}</td>
+   <td class="actions-col">
+    <div class="row-actions">
+     ${r.status==="borrowed"&&canManage()?`<button class="mini-btn" data-return-item="${r.item_id}">↩ Return</button>`:""}
+     <button class="mini-btn" data-print-slip="${r.id}" title="Print DepEd equipment borrower slip">🖶 Slip</button>
+    </div>
+   </td>
   </tr>`;
- }).join(""):`<tr><td colspan="7" class="empty-state">${f==="borrowed"?"No items are currently borrowed.":"No borrow/return records found."}</td></tr>`;
+ }).join(""):`<tr><td colspan="7" class="empty-state">${f==="overdue"?"No overdue borrowed items! All borrowed equipment is within the expected return date.":f==="borrowed"?"No items are currently borrowed.":"No borrow/return records found."}</td></tr>`;
 }
-function renderRequests(){const q=$("requestSearch").value.toLowerCase(),f=$("requestFilter").value;const rows=state.requests.filter(r=>(`${r.profiles?.full_name||""} ${r.inventory_items?.name||""} ${r.note||""}`.toLowerCase().includes(q))&&(!f||r.status===f));$("requestsBody").innerHTML=rows.length?rows.map(r=>`<tr><td>${date(r.created_at)}</td><td>${esc(r.profiles?.full_name||"User")}</td><td>${esc(r.inventory_items?.name||"Item")}</td><td>${number(r.quantity)}</td><td>${statusBadge(r.status)}</td><td>${esc(r.note||"—")}</td><td>${canManage()&&r.status==="pending"?`<div class="row-actions"><button class="mini-btn" data-request-action="approved" data-id="${r.id}">Approve</button><button class="mini-btn" data-request-action="rejected" data-id="${r.id}">Reject</button></div>`:canManage()&&r.status==="approved"?`<button class="mini-btn" data-request-action="fulfilled" data-id="${r.id}">Mark fulfilled</button>`:"—"}</td></tr>`).join(""):'<tr><td colspan="7" class="empty-state">No requests found.</td></tr>'}
+function renderRequests(){
+ const q=($("requestSearch")?.value||"").toLowerCase().trim();
+ const f=$("requestFilter")?.value||"";
+ const rows=state.requests.filter(r=>{
+  const reqName=getRequisitionerName(r);
+  const noteClean=cleanRequestNote(r.note);
+  const hay=`${reqName} ${r.profiles?.full_name||""} ${r.inventory_items?.name||""} ${noteClean}`.toLowerCase();
+  return hay.includes(q)&&(!f||r.status===f);
+ });
+ const body=$("requestsBody");
+ if(!body)return;
+ if(!rows.length){
+  body.innerHTML='<tr><td colspan="8" class="empty-state">No supply requisitions found.</td></tr>';
+  return;
+ }
+ body.innerHTML=rows.map(r=>{
+  const inv=state.inventory.find(x=>x.id===r.item_id);
+  const currentStock=inv?Number(inv.quantity||0):0;
+  const isStockLow=currentStock<Number(r.quantity)&&(r.status==="pending"||r.status==="approved");
+  const stockDisplay=inv
+   ? `<strong>${number(currentStock)}</strong> ${esc(inv.unit||"unit")}${isStockLow?` <span class="danger-tag" style="font-size:10px">Low stock</span>`:""}`
+   : `<span class="muted">0 (Unavailable)</span>`;
+
+  let actionCol="—";
+  if(canManage()){
+   if(r.status==="pending"){
+    actionCol=`<div class="row-actions"><button class="mini-btn" data-request-action="approved" data-id="${r.id}" title="Approve requisition">Approve</button><button class="mini-btn danger-tag" data-request-action="rejected" data-id="${r.id}" title="Reject requisition">Reject</button><button class="mini-btn" data-ris-slip="${r.id}" title="Print DepEd Requisition and Issue Slip">🖶 RIS</button></div>`;
+   }else if(r.status==="approved"){
+    actionCol=`<div class="row-actions"><button class="mini-btn primary-tag" data-request-action="fulfilled" data-id="${r.id}" title="Issue items and deduct physical stock">Issue Stock</button><button class="mini-btn" data-ris-slip="${r.id}" title="Print DepEd Requisition and Issue Slip">🖶 RIS</button></div>`;
+   }else{
+    actionCol=`<div class="row-actions"><button class="mini-btn" data-ris-slip="${r.id}" title="Print DepEd Requisition and Issue Slip">🖶 RIS Slip</button></div>`;
+   }
+  }else{
+   actionCol=`<button class="mini-btn" data-ris-slip="${r.id}" title="Print DepEd Requisition and Issue Slip">🖶 RIS Slip</button>`;
+  }
+
+  const reqName=getRequisitionerName(r);
+  const recorder=r.profiles?.full_name;
+  const hasDiffRecorder=recorder&&recorder.toLowerCase()!==reqName.toLowerCase();
+
+  return `<tr>
+   <td>${date(r.created_at)}</td>
+   <td><strong>${esc(reqName)}</strong>${hasDiffRecorder?`<br><small class="muted">Recorded by: ${esc(recorder)}</small>`:""}</td>
+   <td><strong>${esc(r.inventory_items?.name||inv?.article||"Supply Item")}</strong><br><small>${esc(inv?.item_code||"No Property No.")}${inv?.location?` · ${esc(inv.location)}`:""}</small></td>
+   <td><strong>${number(r.quantity)}</strong> <small>${esc(inv?.unit||"unit")}</small></td>
+   <td>${stockDisplay}</td>
+   <td>${esc(cleanRequestNote(r.note))}</td>
+   <td>${statusBadge(r.status)}</td>
+   <td class="actions-col">${actionCol}</td>
+  </tr>`;
+ }).join("");
+}
+function renderMaintenance(){
+ const el=$("maintenanceBody");
+ if(!el)return;
+ const q=($("maintenanceSearch")?.value||"").toLowerCase().trim();
+ const f=$("maintenanceFilter")?.value||"";
+ const rows=state.maintenance.filter(m=>{
+  const itemName=m.inventory_items?.name||m.item_name||"";
+  const itemCode=m.inventory_items?.item_code||m.item_code||"";
+  const hay=`${itemName} ${itemCode} ${m.defect||""} ${m.technician||""} ${m.remarks||""} ${m.profiles?.full_name||""} ${m.reported_by_name||""}`.toLowerCase();
+  return hay.includes(q)&&(!f||m.status===f);
+ });
+
+ if(!rows.length){
+  el.innerHTML=`<tr><td colspan="7" class="empty-state">${f==="pending"?"No pending repairs.":f==="in_repair"?"No equipment currently under service.":f==="condemned"?"No condemned assets.":"No maintenance logs found."}</td></tr>`;
+  return;
+ }
+
+ el.innerHTML=rows.map(m=>{
+  const itemName=m.inventory_items?.name||m.item_name||"Equipment";
+  const itemCode=m.inventory_items?.item_code||m.item_code||"No Property No.";
+  const loc=m.inventory_items?.location?` · ${esc(m.inventory_items.location)}`:"";
+  const reporter=m.profiles?.full_name||m.reported_by_name||"Staff";
+  let actionBtns="—";
+  if(canManage()){
+   if(m.status==="pending"){
+    actionBtns=`<div class="row-actions"><button class="mini-btn" data-maintenance-action="in_repair" data-id="${m.id}" title="Begin technician service">Start Service</button><button class="mini-btn primary-tag" data-maintenance-action="repaired" data-id="${m.id}" title="Mark fixed and restored to good condition">Repaired</button><button class="mini-btn danger-tag" data-maintenance-action="condemned" data-id="${m.id}" title="Declare condemned/unusable">Condemn</button></div>`;
+   }else if(m.status==="in_repair"){
+    actionBtns=`<div class="row-actions"><button class="mini-btn primary-tag" data-maintenance-action="repaired" data-id="${m.id}" title="Mark fixed and restored to good condition">Mark Repaired</button><button class="mini-btn danger-tag" data-maintenance-action="condemned" data-id="${m.id}" title="Declare condemned/unusable">Condemn</button></div>`;
+   }else if(m.status==="repaired"){
+    actionBtns=`<span class="muted" style="font-size:12px">✓ Restored</span>`;
+   }else if(m.status==="condemned"){
+    actionBtns=`<span class="danger-tag" style="font-size:11px">Condemned</span>`;
+   }
+  }
+
+  return `<tr>
+   <td>${date(m.created_at)}</td>
+   <td><strong>${esc(itemName)}</strong><br><small>${esc(itemCode)}${loc}</small></td>
+   <td><strong style="color:#b91c1c">${esc(m.defect||"—")}</strong></td>
+   <td><strong>${esc(reporter)}</strong></td>
+   <td>${esc(m.technician||"—")}${m.remarks?`<br><small class="muted">${esc(m.remarks)}</small>`:""}</td>
+   <td>${statusBadge(m.status)}</td>
+   <td class="actions-col">${actionBtns}</td>
+  </tr>`;
+ }).join("");
+}
+function populateRegisteredUsersDropdown(){
+ const el=$("accessUserSelect");
+ if(!el)return;
+ const currentVal=el.value;
+ const users=state.profilesList||[];
+ el.innerHTML='<option value="">All Registered Accounts ('+users.length+')</option>'+
+   users.map(u=>{
+     const emailStr=u.email?` · ${u.email}`:"";
+     return `<option value="${esc(u.id)}" ${u.id===currentVal?"selected":""}>${esc(u.full_name||"User")}${esc(emailStr)} [${esc((u.role||"requester").toUpperCase())}]</option>`;
+   }).join("");
+}
+function renderAccessRequests(){
+ const body=$("accessRequestsBody");
+ if(!body)return;
+ if(!isAdmin()){
+  body.innerHTML='<tr><td colspan="8" class="empty-state">Only administrators and developers can view access requests.</td></tr>';
+  return;
+ }
+ const q=($("accessSearch")?.value||"").toLowerCase().trim();
+ const f=$("accessFilter")?.value||"pending";
+ const selectedUserId=$("accessUserSelect")?.value||"";
+
+ if(f==="registered_users"||Boolean(selectedUserId)){
+  let users=state.profilesList||[];
+  if(selectedUserId){
+   users=users.filter(u=>u.id===selectedUserId);
+  }
+  const filtered=users.filter(u=>{
+   const hay=`${u.full_name||""} ${u.email||""} ${u.role||""} ${u.id||""}`.toLowerCase();
+   return hay.includes(q);
+  });
+
+  if(!filtered.length){
+   body.innerHTML='<tr><td colspan="8" class="empty-state">No registered accounts found matching your query.</td></tr>';
+   return;
+  }
+
+  body.innerHTML=filtered.map(u=>{
+   const isSelf=state.user?.id===u.id;
+   let actionCol="—";
+   if(isSelf){
+    actionCol=`<span class="muted" style="font-size:11px">Current Active Account (${(u.role||"admin").toUpperCase()})</span>`;
+   }else{
+    actionCol=`<div class="row-actions">
+     ${u.role!=="staff"?`<button class="mini-btn btn-confirm" data-change-role="staff" data-user-id="${u.id}" title="Grant Staff Custodian permissions">Make Staff</button>`:""}
+     ${u.role!=="teacher"?`<button class="mini-btn" data-change-role="teacher" data-user-id="${u.id}" title="Assign Teacher role">Make Teacher</button>`:""}
+     ${u.role!=="admin"?`<button class="mini-btn" data-change-role="admin" data-user-id="${u.id}" title="Promote to Administrator">Make Admin</button>`:""}
+     ${["staff","admin"].includes(u.role)?`<button class="mini-btn btn-cancel" data-change-role="requester" data-user-id="${u.id}" title="Revoke access">Revoke</button>`:""}
+    </div>`;
+   }
+
+   return `<tr>
+    <td>${u.created_at?date(u.created_at):"—"}</td>
+    <td><strong>${esc(u.full_name||"School User")}</strong>${isSelf?` <span class="primary-tag" style="font-size:9px">You</span>`:""}</td>
+    <td>${u.email?`<a href="mailto:${esc(u.email)}" style="color:var(--blue);text-decoration:none">${esc(u.email)}</a>`:`<span class="muted">UID: ${esc(u.id.slice(0,8))}...</span>`}</td>
+    <td><small class="muted">ID: ${esc(u.id.slice(0,8))}</small></td>
+    <td>${statusBadge(u.role||"requester")}</td>
+    <td>${u.role==="requester"?"Pending confirmation":"Active user profile"}</td>
+    <td>${["admin","developer","staff"].includes(u.role)?statusBadge("approved"):statusBadge(u.role||"pending")}</td>
+    <td class="actions-col">${actionCol}</td>
+   </tr>`;
+  }).join("");
+  return;
+ }
+
+ const rows=state.accessRequests.filter(r=>{
+  const hay=`${r.full_name||""} ${r.email||""} ${r.department||""} ${r.requested_role||""} ${r.reason||""}`.toLowerCase();
+  const matchesQuery=hay.includes(q);
+  const matchesFilter=(!f||f==="all")?true:r.status===f;
+  return matchesQuery&&matchesFilter;
+ });
+
+ if(!rows.length){
+  body.innerHTML=`<tr><td colspan="8" class="empty-state">${f==="pending"?"No pending access requests at this time.":f==="all"?"No access requests found.":"No "+f+" access requests."}</td></tr>`;
+  return;
+ }
+
+ body.innerHTML=rows.map(r=>{
+  let actionCol="—";
+  if(r.status==="pending"){
+   actionCol=`<div class="row-actions">
+    <button class="mini-btn btn-confirm" data-access-action="approved" data-access-role="staff" data-id="${r.id}" title="Confirm and grant staff access">✓ Confirm Staff Access</button>
+    <button class="mini-btn btn-cancel" data-access-action="rejected" data-id="${r.id}" title="Cancel request">✕ Cancel</button>
+   </div>`;
+  }else if(r.status==="approved"){
+   actionCol=`<div class="row-actions">
+    <span class="status staff" style="margin-right:6px">✓ Confirmed Staff</span>
+    <button class="mini-btn btn-cancel" data-access-action="rejected" data-id="${r.id}" title="Revoke / Cancel access">Revoke</button>
+   </div>`;
+  }else if(r.status==="rejected"){
+   actionCol=`<div class="row-actions">
+    <span class="danger-tag" style="font-size:10px;padding:3px 6px;border-radius:4px;margin-right:6px">✕ Cancelled</span>
+    <button class="mini-btn btn-confirm" data-access-action="approved" data-access-role="staff" data-id="${r.id}" title="Re-confirm as Staff">Re-confirm Staff</button>
+   </div>`;
+  }
+
+  return `<tr>
+   <td>${date(r.created_at)}</td>
+   <td><strong>${esc(r.full_name||"Staff Applicant")}</strong></td>
+   <td><a href="mailto:${esc(r.email)}" style="color:var(--blue);text-decoration:none">${esc(r.email)}</a></td>
+   <td>${esc(r.department||"Property / Staff")}</td>
+   <td>${statusBadge(r.requested_role||"staff")}</td>
+   <td>${esc(r.reason||"Staff account registration")}</td>
+   <td>${statusBadge(r.status)}</td>
+   <td class="actions-col">${actionCol}</td>
+  </tr>`;
+ }).join("");
+}
+async function changeUserRole(userId, newRole){
+ if(!isAdmin()){toast("Developer or Administrator privileges required.");return}
+ const u=(state.profilesList||[]).find(x=>x.id===userId);
+ const name=u?.full_name||"User";
+ if(!confirm(`Change role of ${name} to ${newRole.toUpperCase()}?`))return;
+
+ try{
+  const {error}=await db.from("profiles").update({role:newRole}).eq("id",userId);
+  if(error)throw error;
+
+  try{
+   await db.from("access_requests")
+    .update({
+     status:newRole==="rejected"?"rejected":"approved",
+     reviewed_by:state.user?.id||null,
+     reviewed_at:new Date().toISOString()
+    })
+    .or(`user_id.eq.${userId},email.eq.${u?.email||""}`);
+  }catch(err){console.warn("access_requests sync:",err.message)}
+
+  await logAudit({
+   action:"updated",
+   item_name:`User Role (${name})`,
+   item_code:newRole,
+   details:`Role updated to ${newRole} by ${actorName()}`
+  });
+
+  toast(`Updated: ${name} is now ${newRole.toUpperCase()}`);
+  await loadAll();
+ }catch(e){
+  toast("Failed to update role: "+e.message);
+  console.error(e);
+ }
+}
+async function accessRequestAction(id, action, targetRole="staff"){
+ if(!isAdmin()){toast("Developer or Administrator privileges required.");return}
+ const req=state.accessRequests.find(x=>x.id===id);
+ if(!req)return;
+ const confirmMsg=action==="approved"
+  ? `Confirm ${req.full_name} (${req.email}) for STAFF access?`
+  : `Cancel request for ${req.full_name} (${req.email})?`;
+ if(!confirm(confirmMsg))return;
+
+ try{
+  if(action==="approved"){
+   let rpcOk=false;
+   try{
+    const res=await db.rpc("confirm_staff_user",{p_request_id:id,p_role:targetRole});
+    if(res?.data?.success)rpcOk=true;
+   }catch(rpcErr){console.warn("RPC notice:",rpcErr.message)}
+
+   if(!rpcOk){
+    const updatePayload={
+     status:"approved",
+     reviewed_by:state.user?.id||null,
+     reviewed_at:new Date().toISOString()
+    };
+    await db.from("access_requests").update(updatePayload).eq("id",id);
+    if(req.user_id){
+     await db.from("profiles").update({role:targetRole,full_name:req.full_name}).eq("id",req.user_id);
+    }else{
+     const pEntries=[...(state.profilesMap?.values()||[])];
+     const match=pEntries.find(p=>(p.email&&p.email.toLowerCase()===req.email.toLowerCase())||(p.full_name&&p.full_name.toLowerCase()===req.full_name.toLowerCase()));
+     if(match){
+      await db.from("profiles").update({role:targetRole,full_name:req.full_name}).eq("id",match.id);
+     }
+    }
+   }
+   toast(`Confirmed! ${req.full_name} now has Staff access.`);
+  }else{
+   const updatePayload={
+    status:"rejected",
+    reviewed_by:state.user?.id||null,
+    reviewed_at:new Date().toISOString()
+   };
+   await db.from("access_requests").update(updatePayload).eq("id",id);
+   if(req.user_id){
+    await db.from("profiles").update({role:"rejected"}).eq("id",req.user_id);
+   }
+   toast(`Request for ${req.full_name} was cancelled.`);
+  }
+
+  await logAudit({
+   action:"updated",
+   item_name:`Staff Access (${req.full_name})`,
+   item_code:targetRole,
+   details:`Staff access request for ${req.email} was marked as ${action==="approved"?"confirmed":"cancelled"}`
+  });
+
+  await loadAll();
+ }catch(e){
+  toast("Failed to update access request: "+e.message);
+  console.error(e);
+ }
+}
 function renderHistory(){
  const el=$("historyBody");if(!el)return;
  const q=($("historySearch")?.value||"").toLowerCase(),f=$("historyFilter")?.value||"";
@@ -346,7 +748,7 @@ function renderHistory(){
 }
 function renderReports(){const total=state.inventory.length,borrowed=state.inventory.filter(x=>statusFor(x)==="borrowed").length,available=Math.max(0,total-borrowed),qty=state.inventory.reduce((s,x)=>s+Number(x.quantity||0),0);$("reportSummary").innerHTML=[["Unique item records",total],["Available items",available],["Borrowed items",borrowed],["Total physical count",qty],["Pending requests",state.requests.filter(x=>x.status==="pending").length]].map(([a,b])=>`<div class="report-line"><span>${a}</span><strong>${number(b)}</strong></div>`).join("");const cats={};state.inventory.forEach(x=>cats[x.category||"Uncategorized"]=(cats[x.category||"Uncategorized"]||0)+1);$("reportCategories").innerHTML=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<div class="category-row"><span>${esc(c)}</span><div class="bar-track"><div class="bar-fill" style="width:${total?n/total*100:0}%"></div></div><strong>${n}</strong></div>`).join("")||'<div class="empty-state">No category data.</div>'}
 function openModal(type,title,fields,record=null){state.modalType=type;state.editingId=record?.id||null;$("modalTitle").textContent=title;$("modalEyebrow").textContent=type.toUpperCase();$("modalError").textContent="";$("modalSubmit").textContent="Save changes";$("modalSubmit").className="primary-btn";$("modalSubmit").disabled=false;$("modalFields").innerHTML=fields.map(f=>{const rawVal=record?.[f.name]??f.value??"";const val=f.type==="date"?(toISODate(rawVal)||todayISO()):rawVal;let control;if(f.options)control=`<select name="${f.name}" ${f.required?"required":""}>${f.options.map(o=>`<option value="${esc(o.value)}" ${String(val)===String(o.value)?"selected":""}>${esc(o.label)}</option>`).join("")}</select>`;else if(f.type==="textarea")control=`<textarea name="${f.name}" placeholder="${esc(f.placeholder||"")}">${esc(val)}</textarea>`;else control=`<input name="${f.name}" type="${f.type||"text"}" value="${esc(val)}" placeholder="${esc(f.placeholder||"")}" ${f.required?"required":""} ${f.min!==undefined?`min="${f.min}"`:""} ${f.step?`step="${f.step}"`:""}>`;return `<label class="${f.full?"full-field":""}">${f.label}${control}</label>`}).join("");$("modalBackdrop").classList.remove("hidden")}
-function closeModal(){$("modalBackdrop").classList.add("hidden");$("modalForm").reset();$("modalSubmit").textContent="Save changes";$("modalSubmit").className="primary-btn";$("modalSubmit").disabled=false;state.editingId=null;state.modalType=null;state.importRows=[];state.deleteIds=[];state.selectedBorrowItemId=null;state.selectedReturnItemId=null}
+function closeModal(){$("modalBackdrop").classList.add("hidden");$("modalForm").reset();$("modalSubmit").textContent="Save changes";$("modalSubmit").className="primary-btn";$("modalSubmit").disabled=false;state.editingId=null;state.modalType=null;state.importRows=[];state.deleteIds=[];state.selectedBorrowItemId=null;state.selectedReturnItemId=null;state.selectedMaintenanceItemId=null}
 const categories=["IT Equipment","Office Supplies","Furniture","Laboratory","Books","Sports Equipment","Machinery & Equipment","Cleaning Supplies","Other"];
 function itemFields(){
  return [
@@ -639,7 +1041,15 @@ function openReturnModal(preselectedItemId=null){
   </div>
   <div id="returnPickBanner" class="import-help">Click a borrowed item above to return it to inventory.</div>
   <input type="hidden" name="item_id" id="returnItemIdInput" value="${esc(preselectedItemId||"")}" />
-  <label class="full-field">Return Remarks / Condition (optional)<input type="text" name="return_notes" placeholder="e.g. Returned in good condition" /></label>`;
+  <label class="full-field">Item Condition upon Return
+   <select name="return_condition" id="returnConditionSelect">
+    <option value="In Good Condition">In Good Condition</option>
+    <option value="Fair / Usable">Fair / Usable</option>
+    <option value="Needs Repair">Needs Repair</option>
+    <option value="Unserviceable / Damaged">Unserviceable / Damaged</option>
+   </select>
+  </label>
+  <label class="full-field">Return Remarks / Notes (optional)<input type="text" name="return_notes" placeholder="e.g. Returned on time, complete accessories, minor wear" /></label>`;
 
  const selectForReturn=(id)=>{
   const item=state.inventory.find(x=>x.id===id);
@@ -656,6 +1066,11 @@ function openReturnModal(preselectedItemId=null){
   $("modalSubmit").disabled=false;
   banner.className="borrow-banner ok";
   banner.innerHTML=`<strong>↩ Returning: ${esc(item.article||item.name)} ${item.item_code?`(${esc(item.item_code)})`:""}</strong><div>Borrowed by: <b>${esc(active.borrower)}</b> · Reason: ${esc(active.reason||"—")} · Expected Return: <b>${esc(formatDateAcquired(active.expected_return)||"—")}</b></div>`;
+  const condSelect=$("returnConditionSelect");
+  if(condSelect&&item.condition){
+   const match=Array.from(condSelect.options).find(o=>o.value.toLowerCase()===item.condition.toLowerCase());
+   if(match)condSelect.value=match.value;
+  }
  };
 
  const renderReturnList=()=>{
@@ -701,7 +1116,88 @@ function openReturnModal(preselectedItemId=null){
  renderReturnList();
  $("modalBackdrop").classList.remove("hidden");
 }
-function openRequest(){const opts=state.inventory.filter(x=>statusFor(x)==="available").map(x=>({value:x.id,label:`${x.article||x.name} (${x.quantity} ${x.unit||"pcs"} available)`}));if(!opts.length)return toast("No available inventory items to request.");openModal("request","Create supply request",[{name:"item_id",label:"Requested item",options:opts,required:true},{name:"quantity",label:"Quantity",type:"number",min:1,required:true},{name:"created_at",label:"Date entered",type:"date",value:todayISO(),required:true},{name:"note",label:"Purpose / note",type:"textarea",full:true}])}
+function openRequest(){
+ const opts=state.inventory.filter(x=>statusFor(x)==="available").map(x=>({value:x.id,label:`${x.article||x.name}${x.item_code?` (${x.item_code})`:""} — ${x.quantity} ${x.unit||"unit"} available`}));
+ if(!opts.length)return toast("No inventory items currently available to request.");
+ const defaultRequisitioner=state.profile?.full_name||state.user?.email?.split("@")[0]||"";
+ openModal("request","New Supply Requisition (RIS)",[
+  {name:"requisitioner_name",label:"Who Requested (Requisitioner Full Name)",value:defaultRequisitioner,placeholder:"Enter full name of teacher or staff member requesting",required:true,full:true},
+  {name:"item_id",label:"Consumable / Supply Item to Requisition",options:opts,required:true},
+  {name:"quantity",label:"Quantity Requested",type:"number",min:1,value:1,required:true},
+  {name:"created_at",label:"Date of Requisition",type:"date",value:todayISO(),required:true},
+  {name:"note",label:"Purpose / Instructional / Office Need",type:"textarea",placeholder:"e.g. For Grade 7 exam reproduction, Homeroom cleaning, etc.",full:true,required:true}
+ ]);
+}
+function openMaintenanceModal(){
+ state.modalType="maintenance";state.editingId=null;state.selectedMaintenanceItemId=null;
+ $("modalTitle").textContent="Report Equipment Defect / Repair";
+ $("modalEyebrow").textContent="MAINTENANCE";
+ $("modalError").textContent="";
+ $("modalSubmit").textContent="Submit Repair Report";
+ $("modalSubmit").className="primary-btn";
+ $("modalSubmit").disabled=true;
+ $("modalFields").innerHTML=`
+  <div class="picker-wrap">
+   <label class="full-field">Search equipment to report defect (click an item below)<input type="text" id="maintenancePickerSearch" placeholder="Search by equipment name, property no., serial no., or location..." autocomplete="off" /></label>
+   <div id="maintenancePickerList" class="picker-list"></div>
+  </div>
+  <div id="maintenancePickBanner" class="import-help">Click an equipment item from the list above.</div>
+  <input type="hidden" name="item_id" id="maintenanceItemIdInput" />
+  <label class="full-field">Defect / Reported Issue (Specific breakdown or malfunction)<textarea name="defect" id="maintenanceDefectInput" placeholder="Describe the defect, damaged parts, or symptoms of malfunction..." required></textarea></label>
+  <label>Technician / Service Provider (optional)<input type="text" name="technician" placeholder="e.g. In-house ICT, DepEd Division Engineer, External Shop" /></label>
+  <label>Initial Status
+   <select name="status">
+    <option value="pending">Pending Repair (Reported, awaiting technician)</option>
+    <option value="in_repair">Under Service / In Repair (Technician actively servicing)</option>
+   </select>
+  </label>
+  <label class="full-field">Remarks / Action Taken (optional)<input type="text" name="remarks" placeholder="e.g. Pulled out for parts replacement, diagnostic ongoing" /></label>`;
+
+ const renderMaintPickerList=()=>{
+  const q=($("maintenancePickerSearch")?.value||"").toLowerCase().trim();
+  const matches=state.inventory.filter(x=>{
+   const hay=`${x.article||""} ${x.name||""} ${x.item_code||""} ${x.serial_no||""} ${x.location||""}`.toLowerCase();
+   return hay.includes(q);
+  }).slice(0,80);
+  const listEl=$("maintenancePickerList");
+  if(!listEl)return;
+  if(!matches.length){
+   listEl.innerHTML='<div class="empty-state" style="padding:18px">No matching equipment found.</div>';
+   return;
+  }
+  listEl.innerHTML=matches.map(x=>{
+   const isSel=state.selectedMaintenanceItemId===x.id;
+   return `<button type="button" class="picker-item ${isSel?"selected":""}" data-maintenance-pick="${x.id}">
+    <div class="picker-item-info">
+     <strong>${esc(x.article||x.name)}</strong>
+     <small>${esc(x.item_code||"No Property No.")}${x.location?` · ${esc(x.location)}`:""} · Condition: ${esc(x.condition||"Usable")}</small>
+    </div>
+    ${statusBadge(statusFor(x))}
+   </button>`;
+  }).join("");
+ };
+
+ $("maintenancePickerSearch").addEventListener("input",renderMaintPickerList);
+ $("maintenancePickerList").addEventListener("click",e=>{
+  const btn=e.target.closest("[data-maintenance-pick]");
+  if(!btn)return;
+  const id=btn.dataset.maintenancePick;
+  const item=state.inventory.find(x=>x.id===id);
+  if(!item)return;
+  state.selectedMaintenanceItemId=id;
+  $("maintenanceItemIdInput").value=id;
+  $("modalSubmit").disabled=false;
+  const banner=$("maintenancePickBanner");
+  banner.className="borrow-banner ok";
+  banner.innerHTML=`<strong>✓ Selected: ${esc(item.article||item.name)}</strong><div>Property No.: ${esc(item.item_code||"—")} · Location: ${esc(item.location||"—")} · Current Condition: <b>${esc(item.condition||"Usable")}</b></div>`;
+  renderMaintPickerList();
+  $("maintenanceDefectInput")?.focus();
+ });
+
+ renderMaintPickerList();
+ $("modalBackdrop").classList.remove("hidden");
+ setTimeout(()=>$("maintenancePickerSearch")?.focus(),30);
+}
 function openDeleteModal(ids){
  if(!canManage())return toast("You do not have permission to delete inventory.");
  if(!ids.length)return;
@@ -777,19 +1273,98 @@ async function submitModal(e){e.preventDefault();const data=Object.fromEntries(n
   const active=getActiveBorrow(itemId);
   if(!active)throw new Error("This item is already marked as Available.");
   const item=state.inventory.find(x=>x.id===itemId);
-  const notes=(data.return_notes||"").trim()||"Returned";
-  const refJson=JSON.stringify({borrower:active.borrower,returned_date:formatDateAcquired(todayISO())});
-  const {error}=await db.rpc("record_stock_transaction",{p_item_id:itemId,p_type:"in",p_quantity:1,p_reference:refJson,p_notes:notes});
+  const notes=(data.return_notes||"").trim();
+  const returnCondition=(data.return_condition||"").trim()||item?.condition||"In Good Condition";
+
+  const {error:condErr}=await db.from("inventory_items").update({condition:returnCondition}).eq("id",itemId);
+  if(condErr)console.warn("Could not update item condition:",condErr.message);
+  if(item)item.condition=returnCondition;
+
+  const noteDetails=`Condition: ${returnCondition}${notes?` · Notes: ${notes}`:""}`;
+  const refJson=JSON.stringify({borrower:active.borrower,returned_date:formatDateAcquired(todayISO()),condition:returnCondition});
+  const {error}=await db.rpc("record_stock_transaction",{p_item_id:itemId,p_type:"in",p_quantity:1,p_reference:refJson,p_notes:noteDetails});
   if(error)throw error;
   await logAudit({
    action:"updated",
    item_name:item?.article||item?.name||"Inventory item",
    item_code:item?.item_code||null,
-   details:`Returned by ${active.borrower}${data.return_notes?.trim()?` · Notes: ${data.return_notes.trim()}`:""}`
+   details:`Returned by ${active.borrower} · ${noteDetails}`
   });
-  toast("Item returned and marked Available");
+  toast(`Item returned · Condition: ${returnCondition}`);
  }
- if(state.modalType==="request"){data.quantity=Number(data.quantity);const createdAt=fromDateInput(data.created_at);const res=await db.from("item_requests").insert({item_id:data.item_id,quantity:data.quantity,note:data.note||null,created_at:createdAt,requested_by:state.user.id});if(res.error)throw res.error;toast("Request submitted")}
+ if(state.modalType==="request"){
+  data.quantity=Number(data.quantity);
+  const createdAt=fromDateInput(data.created_at);
+  const requisitionerName=(data.requisitioner_name||"").trim()||actorName();
+  const noteContent=(data.note||"").trim()||null;
+
+  let res=await db.from("item_requests").insert({
+   item_id:data.item_id,
+   quantity:data.quantity,
+   requisitioner_name:requisitionerName,
+   note:noteContent,
+   created_at:createdAt,
+   requested_by:state.user.id
+  });
+  if(res.error){
+   const fallbackNote=`[Requisitioner: ${requisitionerName}]${noteContent?` ${noteContent}`:""}`;
+   res=await db.from("item_requests").insert({
+    item_id:data.item_id,
+    quantity:data.quantity,
+    note:fallbackNote,
+    created_at:createdAt,
+    requested_by:state.user.id
+   });
+   if(res.error)throw res.error;
+  }
+  const item=state.inventory.find(x=>x.id===data.item_id);
+  await logAudit({
+   action:"updated",
+   item_name:item?.article||item?.name||"Supply Requisition",
+   item_code:item?.item_code||null,
+   details:`Supply requisition created for ${requisitionerName} (Qty: ${data.quantity})`
+  });
+  toast(`Requisition submitted for ${requisitionerName}`);
+ }
+ if(state.modalType==="maintenance"){
+  const itemId=data.item_id||state.selectedMaintenanceItemId;
+  if(!itemId)throw new Error("Please select an equipment item to report.");
+  const defect=(data.defect||"").trim();
+  if(!defect)throw new Error("Please describe the defect or issue.");
+  const item=state.inventory.find(x=>x.id===itemId);
+  const technician=(data.technician||"").trim()||null;
+  const remarks=(data.remarks||"").trim()||null;
+  const initialStatus=data.status||"pending";
+
+  const payload={
+   item_id:itemId,
+   item_name:item?.article||item?.name||"Equipment",
+   item_code:item?.item_code||null,
+   defect,
+   issue:defect,
+   technician,
+   remarks,
+   status:initialStatus,
+   reported_by:state.user?.id||null,
+   reported_by_name:actorName()
+  };
+
+  const res=await db.from("maintenance_logs").insert(payload);
+  if(res.error)throw res.error;
+
+  const newCondition=initialStatus==="in_repair"?"Under Service / In Repair":"Needs Repair / Defective";
+  const {error:cErr}=await db.from("inventory_items").update({condition:newCondition}).eq("id",itemId);
+  if(cErr)console.warn("Could not update item condition:",cErr.message);
+  if(item)item.condition=newCondition;
+
+  await logAudit({
+   action:"updated",
+   item_name:item?.article||item?.name||"Equipment",
+   item_code:item?.item_code||null,
+   details:`Reported maintenance defect: ${defect} (Status: ${initialStatus})`
+  });
+  toast("Maintenance report submitted");
+ }
  if(state.modalType==="import"){
   if(!state.importRows.length)throw new Error("Please select an Excel file with valid inventory items first.");
   const entryDate=fromDateInput(data.created_at);
@@ -842,23 +1417,449 @@ async function submitModal(e){e.preventDefault();const data=Object.fromEntries(n
  }
  closeModal();await loadAll()
  }catch(err){$("modalError").textContent=err.message||"Something went wrong."}finally{$("modalSubmit").disabled=false}}
+function openSlipModal(recordId){
+ const r=state.borrowRecords?.find(x=>x.id===recordId);
+ if(!r)return toast("Borrow record not found.");
+ const item=state.inventory.find(x=>x.id===r.item_id)||{};
+ const printArea=$("borrowSlipPrintArea");
+ if(!printArea)return;
+ if($("slipModalTitle"))$("slipModalTitle").textContent="Equipment Borrower Slip";
+
+ const slipNo=`SA-BORROW-${(r.id||"").slice(0,8).toUpperCase()}`;
+ const overdueNotice=r.status==="borrowed"&&r.is_overdue
+  ? `<div class="slip-overdue-alert no-print"><span>⚠ NOTICE: This borrowed item is OVERDUE by ${r.overdue_days} day(s)</span><span>Expected Return: ${esc(formatDateAcquired(r.expected_return))}</span></div>`
+  : "";
+
+ printArea.innerHTML=`
+  <div class="slip-sheet">
+   ${overdueNotice}
+   <div class="slip-header">
+    <p>Republic of the Philippines · Department of Education</p>
+    <p>Region IX, Zamboanga Peninsula · Schools Division of Zamboanga del Sur</p>
+    <h2>SAN ANTONIO NATIONAL HIGH SCHOOL</h2>
+    <p>Ramon Magsaysay, Zamboanga del Sur · School ID: 303812</p>
+    <div style="font-size:13px;font-weight:800;letter-spacing:1px;margin-top:8px;text-decoration:underline">EQUIPMENT BORROWER SLIP &amp; GATE PASS</div>
+   </div>
+
+   <div class="slip-meta-grid">
+    <div class="slip-meta-row"><span>Control / Slip No:</span> <strong>${esc(slipNo)}</strong></div>
+    <div class="slip-meta-row"><span>Date Borrowed:</span> <strong>${esc(formatDateAcquired(r.borrowed_date)||date(r.created_at))}</strong></div>
+    <div class="slip-meta-row"><span>Current Status:</span> <strong>${r.status==="borrowed"?(r.is_overdue?`OVERDUE (${r.overdue_days}d)`:"CURRENTLY BORROWED"):"RETURNED"}</strong></div>
+    <div class="slip-meta-row"><span>Expected Return Date:</span> <strong style="${r.is_overdue?'color:#b91c1c':''}">${esc(formatDateAcquired(r.expected_return)||"—")}</strong></div>
+   </div>
+
+   <div class="slip-section-title">I. Borrower Information</div>
+   <table class="slip-table">
+    <tr>
+     <th style="width:25%">Name of Borrower</th>
+     <td style="width:75%"><strong>${esc(r.borrower)}</strong></td>
+    </tr>
+    <tr>
+     <th>Purpose / Activity</th>
+     <td>${esc(r.reason||"—")}</td>
+    </tr>
+   </table>
+
+   <div class="slip-section-title">II. Equipment / Property Details</div>
+   <table class="slip-table">
+    <tr>
+     <th style="width:25%">Article / Item</th>
+     <td style="width:75%"><strong>${esc(item.article||item.name||r.inventory_items?.name||"Unnamed")}</strong></td>
+    </tr>
+    <tr>
+     <th>New Property No.</th>
+     <td><strong>${esc(item.item_code||"—")}</strong></td>
+    </tr>
+    <tr>
+     <th>Old Property No. / Serial No.</th>
+     <td>${esc(item.old_property_no||"—")} / ${esc(item.serial_no||item.model_no||"—")}</td>
+    </tr>
+    <tr>
+     <th>Condition Upon Issuance</th>
+     <td>${esc(item.condition||"In Good Condition")}</td>
+    </tr>
+    <tr>
+     <th>Whereabouts / Location</th>
+     <td>${esc(item.location||"—")}</td>
+    </tr>
+   </table>
+
+   <div class="slip-terms">
+    <strong>Terms of Borrowing &amp; Accountability:</strong>
+    <ol>
+     <li>The borrower acknowledges receipt of the above school property in good working condition.</li>
+     <li>The borrower undertakes to exercise due diligence, care, and responsibility for the equipment.</li>
+     <li>The equipment must be surrendered on or before the stated <strong>Expected Return Date</strong>. Any loss or unserviceability due to negligence shall be the accountability of the borrower in accordance with DepEd/COA Property Regulations.</li>
+    </ol>
+   </div>
+
+   <div class="slip-signatures">
+    <div class="slip-sig-box">
+     <div class="slip-sig-line">${esc(r.borrower)}</div>
+     <div class="slip-sig-sub">Borrower Signature over Printed Name<br>Date: ________________________</div>
+    </div>
+    <div class="slip-sig-box">
+     <div class="slip-sig-line">${esc(r.recorded_by||actorName())}</div>
+     <div class="slip-sig-sub">Property Custodian / Releasing Officer<br>Date: ________________________</div>
+    </div>
+   </div>
+  </div>`;
+
+ $("slipModalBackdrop")?.classList.remove("hidden");
+}
+
+function closeSlipModal(){
+ $("slipModalBackdrop")?.classList.add("hidden");
+}
+
 function deleteItem(id){openDeleteModal([id])}
 function bulkDeleteItems(){const ids=[...state.selectedIds];if(ids.length)openDeleteModal(ids)}
-async function requestAction(id,status){try{const {error}=await db.from("item_requests").update({status,reviewed_by:state.user.id}).eq("id",id);if(error)throw error;toast("Request updated");await loadAll()}catch(e){toast(e.message)}}
+async function requestAction(id,status){
+ try{
+  const req=state.requests.find(x=>x.id===id);
+  if(!req)return toast("Request record not found.");
+  const item=state.inventory.find(x=>x.id===req.item_id);
+  const reqName=getRequisitionerName(req);
+  const noteNote=cleanRequestNote(req.note);
+
+  if(status==="fulfilled"){
+   if(!item)throw new Error("The requested item is no longer in the inventory.");
+   if(Number(item.quantity||0)<Number(req.quantity||0)){
+    throw new Error(`Insufficient stock: Only ${item.quantity} available in inventory, but ${req.quantity} was requested.`);
+   }
+   const refJson=JSON.stringify({requisitioner:reqName,type:"RIS",request_id:id});
+   const noteStr=`RIS Fulfilled · Issued to ${reqName}${noteNote!=="—"?` · Purpose: ${noteNote}`:""}`;
+   const {error:txErr}=await db.rpc("record_stock_transaction",{p_item_id:req.item_id,p_type:"out",p_quantity:Number(req.quantity),p_reference:refJson,p_notes:noteStr});
+   if(txErr)throw txErr;
+   await db.from("item_requests").update({status:"fulfilled",reviewed_by:state.user.id}).eq("id",id);
+   await logAudit({
+    action:"updated",
+    item_name:item.article||item.name||"Supply Item",
+    item_code:item.item_code||null,
+    details:`Supply Requisition Fulfilled: Deducted ${req.quantity} ${item.unit||"unit"} issued to ${reqName}`
+   });
+   toast(`Stock issued! Deducted ${req.quantity} ${item.unit||"units"} to ${reqName}.`);
+  }else{
+   const {error}=await db.from("item_requests").update({status,reviewed_by:state.user.id}).eq("id",id);
+   if(error)throw error;
+   await logAudit({
+    action:"updated",
+    item_name:item?.article||item?.name||"Supply Requisition",
+    item_code:item?.item_code||null,
+    details:`Supply requisition status changed to '${status}' for ${reqName}`
+   });
+   toast(`Requisition ${status}`);
+  }
+  await loadAll();
+ }catch(e){
+  toast(e.message);
+  console.error(e);
+ }
+}
+
+function openRISSlipModal(requestId){
+ const req=state.requests.find(x=>x.id===requestId);
+ if(!req)return toast("Requisition not found.");
+ const item=state.inventory.find(x=>x.id===req.item_id)||req.inventory_items||{};
+ const printArea=$("borrowSlipPrintArea");
+ if(!printArea)return;
+ if($("slipModalTitle"))$("slipModalTitle").textContent="Requisition and Issue Slip (RIS)";
+
+ const risNo=`RIS-${new Date(req.created_at||Date.now()).getFullYear()}-${String((req.id||"").slice(0,6)).toUpperCase()}`;
+ const requisitioner=getRequisitionerName(req);
+ const noteNote=cleanRequestNote(req.note);
+
+ printArea.innerHTML=`
+  <div class="slip-sheet">
+   <div class="slip-header">
+    <p>Republic of the Philippines · Department of Education</p>
+    <p>Region IX, Zamboanga Peninsula · Schools Division of Zamboanga del Sur</p>
+    <h2>SAN ANTONIO NATIONAL HIGH SCHOOL</h2>
+    <p>Ramon Magsaysay, Zamboanga del Sur · School ID: 303812</p>
+    <div style="font-size:13px;font-weight:800;letter-spacing:1px;margin-top:8px;text-decoration:underline">REQUISITION AND ISSUE SLIP (RIS)</div>
+    <div style="font-size:11px;color:#555;font-style:italic;margin-top:2px">Appendix 63 · DepEd Standard Form</div>
+   </div>
+
+   <div class="slip-meta-grid">
+    <div class="slip-meta-row"><span>Entity / School:</span> <strong>SAN ANTONIO NHS</strong></div>
+    <div class="slip-meta-row"><span>RIS Control No.:</span> <strong>${esc(risNo)}</strong></div>
+    <div class="slip-meta-row"><span>Division:</span> <strong>Zamboanga del Sur</strong></div>
+    <div class="slip-meta-row"><span>Date Requested:</span> <strong>${esc(date(req.created_at))}</strong></div>
+    <div class="slip-meta-row"><span>Office / Unit:</span> <strong>Academic Department</strong></div>
+    <div class="slip-meta-row"><span>Status:</span> <strong>${req.status.toUpperCase()}</strong></div>
+   </div>
+
+   <div class="slip-section-title">Requisition &amp; Issuance Items</div>
+   <table class="slip-table">
+    <thead>
+     <tr>
+      <th style="width:14%">Stock / Prop No.</th>
+      <th style="width:10%">Unit</th>
+      <th style="width:36%">Item Description</th>
+      <th style="width:12%">Qty Requested</th>
+      <th style="width:12%">Qty Issued</th>
+      <th style="width:16%">Remarks</th>
+     </tr>
+    </thead>
+    <tbody>
+     <tr>
+      <td>${esc(item.item_code||"—")}</td>
+      <td>${esc(item.unit||"Unit")}</td>
+      <td><strong>${esc(item.article||item.name||"Consumable Item")}</strong>${item.description?`<br><small>${esc(item.description)}</small>`:""}</td>
+      <td style="text-align:center"><strong>${number(req.quantity)}</strong></td>
+      <td style="text-align:center"><strong>${req.status==="fulfilled"?number(req.quantity):"—"}</strong></td>
+      <td>${esc(noteNote!=="—"?noteNote:"For school/instructional use")}</td>
+     </tr>
+    </tbody>
+   </table>
+
+   <div class="slip-meta-row" style="margin-top:12px;border:1px solid #d1d5db;padding:8px;border-radius:4px">
+    <span>Purpose / Activity:</span> <strong>${esc(noteNote!=="—"?noteNote:"Classroom & Administrative Consumables")}</strong>
+   </div>
+
+   <div class="slip-signatures" style="grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 30px;">
+    <div class="slip-sig-box">
+     <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:20px">Requested by:</div>
+     <div class="slip-sig-line">${esc(requisitioner)}</div>
+     <div class="slip-sig-sub">Requisitioner<br>Date: ${date(req.created_at)}</div>
+    </div>
+    <div class="slip-sig-box">
+     <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:20px">Approved by:</div>
+     <div class="slip-sig-line">School Principal</div>
+     <div class="slip-sig-sub">Head of School / Office<br>Date: ________________</div>
+    </div>
+    <div class="slip-sig-box">
+     <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:20px">Issued by:</div>
+     <div class="slip-sig-line">${esc(actorName())}</div>
+     <div class="slip-sig-sub">Supply / Property Custodian<br>Date: ________________</div>
+    </div>
+    <div class="slip-sig-box">
+     <div style="font-size:10px;font-weight:700;color:#6b7280;margin-bottom:20px">Received by:</div>
+     <div class="slip-sig-line">${esc(requisitioner)}</div>
+     <div class="slip-sig-sub">Recipient Signature<br>Date: ________________</div>
+    </div>
+   </div>
+  </div>`;
+
+ $("slipModalBackdrop")?.classList.remove("hidden");
+}
+
+async function maintenanceAction(id,newStatus){
+ if(!canManage())return toast("You do not have permission to update maintenance records.");
+ try{
+  const m=state.maintenance.find(x=>x.id===id);
+  if(!m)return toast("Maintenance record not found.");
+  const item=state.inventory.find(x=>x.id===m.item_id);
+
+  let remarks=m.remarks||"";
+  if(newStatus==="repaired"){
+   const input=prompt("Enter repair remarks / technician resolution (optional):", "Repaired, tested, and restored to functional condition");
+   if(input===null)return;
+   remarks=input.trim()||remarks;
+  }else if(newStatus==="condemned"){
+   const ok=confirm(`Are you sure you want to declare this equipment as CONDEMNED / UNREPAIRABLE?\n\nItem: ${item?.article||item?.name||m.item_name}`);
+   if(!ok)return;
+   const input=prompt("Enter reason / disposal recommendation:", "Unserviceable, beyond economic repair");
+   if(input===null)return;
+   remarks=input.trim()||remarks;
+  }
+
+  const isCompleted=["repaired","condemned"].includes(newStatus);
+  const {error}=await db.from("maintenance_logs").update({
+   status:newStatus,
+   remarks:remarks||null,
+   completed_at:isCompleted?new Date().toISOString():null,
+   resolved_by:state.user?.id||null
+  }).eq("id",id);
+  if(error)throw error;
+
+  if(m.item_id){
+   if(newStatus==="repaired"){
+    await db.from("inventory_items").update({condition:"In Good Condition"}).eq("id",m.item_id);
+    if(item)item.condition="In Good Condition";
+   }else if(newStatus==="condemned"){
+    await db.from("inventory_items").update({condition:"Unserviceable / Condemned"}).eq("id",m.item_id);
+    if(item)item.condition="Unserviceable / Condemned";
+   }else if(newStatus==="in_repair"){
+    await db.from("inventory_items").update({condition:"Under Service / In Repair"}).eq("id",m.item_id);
+    if(item)item.condition="Under Service / In Repair";
+   }
+  }
+
+  const statusLabel=newStatus==="repaired"?"Repaired & Restored":newStatus==="condemned"?"Condemned":newStatus==="in_repair"?"Placed under service":"Updated";
+  await logAudit({
+   action:"updated",
+   item_name:item?.article||item?.name||m.item_name||"Equipment",
+   item_code:item?.item_code||m.item_code||null,
+   details:`Maintenance status changed to ${statusLabel}${remarks?` (${remarks})`:""}`
+  });
+  toast(`Maintenance status: ${statusLabel}`);
+  await loadAll();
+ }catch(e){
+  toast("Failed to update maintenance: "+e.message);
+  console.error(e);
+ }
+}
+
 function exportCSV(){
  const cols=["seq_no","created_at","school_id","district","school_name","old_property_no","item_code","serial_no","model_no","date_acquired","uacs","account_category","account_classification","account_title","article","description","category","unit","unit_value","qty_property_card","quantity","reorder_level","location","condition","useful_life","remarks","available_documents","fund_source","fund","accountable_hris_id","accountable_person","status"];
  const lines=[cols.join(","),...state.inventory.map(x=>cols.map(k=>`"${String(k==="created_at"?toISODate(x[k]):k==="date_acquired"?(formatDateAcquired(x[k])||""):k==="status"?(statusFor(x)==="borrowed"?"Borrowed":"Available"):(x[k]??"")).replace(/"/g,'""')}"`).join(","))];
  const blob=new Blob([lines.join("\n")],{type:"text/csv;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="san-antonio-inventory.csv";a.click();URL.revokeObjectURL(a.href);
 }
-async function handleSession(user){try{const p=await loadProfile(user);showApp(user,p)}catch(e){$("loginError").textContent=e.message;toast(e.message)}}
-async function boot(){if(!hasConfig){$("loginError").textContent="Setup required: add your Supabase project URL and anon key in app.js, then run the SQL schema.";return}const {data:{session}}=await db.auth.getSession();if(session)await handleSession(session.user);db.auth.onAuthStateChange((event,session)=>{if(event==="SIGNED_OUT"){state.user=null;$("app").classList.add("hidden");$("loginScreen").classList.remove("hidden")}if(event==="SIGNED_IN"&&session&&state.user?.id!==session.user.id){setTimeout(()=>handleSession(session.user),0)}});}
+function showPendingScreen(user,profile){
+ state.user=user;
+ state.profile=profile;
+ $("loginScreen")?.classList.add("hidden");
+ $("app")?.classList.add("hidden");
+ $("pendingScreen")?.classList.remove("hidden");
+ const nameEl=$("pendingUserName");
+ if(nameEl)nameEl.textContent=profile?.full_name||user.email?.split("@")[0]||"Staff Applicant";
+}
+async function handleSession(user){
+ try{
+  const p=await loadProfile(user);
+  if(["requester","pending","rejected"].includes(p?.role)){
+   showPendingScreen(user,p);
+   return;
+  }
+  $("pendingScreen")?.classList.add("hidden");
+  showApp(user,p);
+ }catch(e){
+  $("loginError").textContent=e.message;
+  toast(e.message);
+ }
+}
+function setAuthTab(tab){
+ const isSign=tab==="signin";
+ $("tabSignIn")?.classList.toggle("active",isSign);
+ $("tabRegister")?.classList.toggle("active",!isSign);
+ $("loginForm")?.classList.toggle("hidden",!isSign);
+ $("registerForm")?.classList.toggle("hidden",isSign);
+ $("loginError").textContent="";
+ if($("registerError"))$("registerError").textContent="";
+}
+async function handleRegister(e){
+ e.preventDefault();
+ if(!db)return;
+ const btn=$("regSubmitBtn");
+ const errEl=$("registerError");
+ if(errEl)errEl.textContent="";
+ const fullName=$("regFullName")?.value?.trim();
+ const email=$("regEmail")?.value?.trim();
+ const password=$("regPassword")?.value;
+ const department=$("regDepartment")?.value?.trim()||"General Staff";
+
+ if(!fullName||!email||!password){
+  if(errEl)errEl.textContent="Please fill out all fields.";
+  return;
+ }
+ if(password.length<6){
+  if(errEl)errEl.textContent="Password must be at least 6 characters.";
+  return;
+ }
+ if(btn)btn.disabled=true;
+
+ try{
+  const {data,error}=await db.auth.signUp({
+   email:email,
+   password:password,
+   options:{
+    data:{full_name:fullName,department:department}
+   }
+  });
+  if(error)throw error;
+
+  const userId=data?.user?.id||null;
+  try{
+   await db.from("access_requests").insert({
+    user_id:userId,
+    full_name:fullName,
+    email:email,
+    department:department,
+    requested_role:"staff",
+    reason:"Staff account credentials registration",
+    status:"pending"
+   });
+  }catch(accErr){
+   console.warn("access_requests insert notice:",accErr.message);
+  }
+
+  toast("Credentials registered! Sent to Developer for confirmation.");
+
+  if(data?.session&&data?.user){
+   await handleSession(data.user);
+  }else{
+   alert("Thank you, "+fullName+"!\n\nYour credentials have been submitted and sent to the Developer's dashboard (Access Requests).\n\nOnce the developer confirms your staff access, you can sign in with your email and password.");
+   setAuthTab("signin");
+   $("loginEmail").value=email;
+   $("loginPassword").value="";
+  }
+ }catch(err){
+  if(errEl)errEl.textContent=err.message||"Unable to register credentials.";
+  console.error(err);
+ }finally{
+  if(btn)btn.disabled=false;
+ }
+}
+async function boot(){if(!hasConfig){$("loginError").textContent="Setup required: add your Supabase project URL and anon key in app.js, then run the SQL schema.";return}const {data:{session}}=await db.auth.getSession();if(session)await handleSession(session.user);db.auth.onAuthStateChange((event,session)=>{if(event==="SIGNED_OUT"){state.user=null;$("app").classList.add("hidden");$("pendingScreen")?.classList.add("hidden");$("loginScreen").classList.remove("hidden")}if(event==="SIGNED_IN"&&session&&state.user?.id!==session.user.id){setTimeout(()=>handleSession(session.user),0)}});}
 $("loginForm").addEventListener("submit",async e=>{e.preventDefault();if(!db)return;$("loginError").textContent="";const btn=e.target.querySelector('button[type="submit"]');btn.disabled=true;try{const {data,error}=await db.auth.signInWithPassword({email:$("loginEmail").value.trim(),password:$("loginPassword").value});if(error){$("loginError").textContent=error.message;return}if(data?.user)await handleSession(data.user)}catch(err){$("loginError").textContent=err.message||"Unable to sign in."}finally{btn.disabled=false}});
-$("logoutBtn").addEventListener("click",()=>db.auth.signOut());$("refreshBtn").addEventListener("click",loadAll);$("mainNav").addEventListener("click",e=>{const b=e.target.closest("[data-page]");if(b)setPage(b.dataset.page)});document.body.addEventListener("click",e=>{const go=e.target.closest("[data-go]");if(go)setPage(go.dataset.go);const edit=e.target.closest("[data-edit-item]");if(edit){const r=state.inventory.find(x=>x.id===edit.dataset.editItem);openItem(r)}const del=e.target.closest("[data-delete-item]");if(del)deleteItem(del.dataset.deleteItem);const ret=e.target.closest("[data-return-item]");if(ret)openReturnModal(ret.dataset.returnItem);const act=e.target.closest("[data-request-action]");if(act)requestAction(act.dataset.id,act.dataset.requestAction)});
+if($("registerForm"))$("registerForm").addEventListener("submit",handleRegister);
+if($("tabSignIn"))$("tabSignIn").addEventListener("click",()=>setAuthTab("signin"));
+if($("tabRegister"))$("tabRegister").addEventListener("click",()=>setAuthTab("register"));
+if($("switchToRegisterBtn"))$("switchToRegisterBtn").addEventListener("click",()=>setAuthTab("register"));
+if($("switchToSignInBtn"))$("switchToSignInBtn").addEventListener("click",()=>setAuthTab("signin"));
+if($("pendingSignOutBtn"))$("pendingSignOutBtn").addEventListener("click",()=>{db.auth.signOut();$("pendingScreen")?.classList.add("hidden");$("loginScreen")?.classList.remove("hidden")});
+if($("pendingRefreshBtn"))$("pendingRefreshBtn").addEventListener("click",async()=>{
+ if(!state.user){$("pendingScreen")?.classList.add("hidden");$("loginScreen")?.classList.remove("hidden");return}
+ const btn=$("pendingRefreshBtn");btn.disabled=true;
+ try{
+  const p=await loadProfile(state.user);
+  if(["staff","admin","developer"].includes(p?.role)){
+   $("pendingScreen")?.classList.add("hidden");
+   toast("Confirmed! You now have Staff access.");
+   showApp(state.user,p);
+  }else if(p?.role==="rejected"){
+   toast("Your access request was cancelled by the developer.");
+  }else{
+   toast("Status: Still pending developer confirmation.");
+  }
+ }catch(e){toast("Could not check status: "+e.message)}
+ finally{btn.disabled=false}
+});
+$("logoutBtn").addEventListener("click",()=>db.auth.signOut());$("refreshBtn").addEventListener("click",loadAll);if($("refreshAccessBtn"))$("refreshAccessBtn").addEventListener("click",loadAll);$("mainNav").addEventListener("click",e=>{const b=e.target.closest("[data-page]");if(b)setPage(b.dataset.page)});document.body.addEventListener("click",e=>{
+ const go=e.target.closest("[data-go]");if(go)setPage(go.dataset.go);
+ const edit=e.target.closest("[data-edit-item]");if(edit){const r=state.inventory.find(x=>x.id===edit.dataset.editItem);openItem(r)}
+ const del=e.target.closest("[data-delete-item]");if(del)deleteItem(del.dataset.deleteItem);
+ const ret=e.target.closest("[data-return-item]");if(ret)openReturnModal(ret.dataset.returnItem);
+ const slip=e.target.closest("[data-print-slip]");if(slip)openSlipModal(slip.dataset.printSlip);
+ const ris=e.target.closest("[data-ris-slip]");if(ris)openRISSlipModal(ris.dataset.risSlip);
+ const act=e.target.closest("[data-request-action]");if(act)requestAction(act.dataset.id,act.dataset.requestAction);
+ const mAct=e.target.closest("[data-maintenance-action]");if(mAct)maintenanceAction(mAct.dataset.id,mAct.dataset.maintenanceAction);
+ const accAct=e.target.closest("[data-access-action]");if(accAct)accessRequestAction(accAct.dataset.id,accAct.dataset.accessAction,accAct.dataset.accessRole);
+ const chRole=e.target.closest("[data-change-role]");if(chRole)changeUserRole(chRole.dataset.userId,chRole.dataset.changeRole);
+});
 document.body.addEventListener("change",e=>{
  const all=e.target.closest("#selectAllInventory");
  if(all){state.visibleIds.forEach(id=>{if(all.checked)state.selectedIds.add(id);else state.selectedIds.delete(id)});renderInventory();return}
  const chk=e.target.closest("[data-select-item]");
  if(chk){if(chk.checked)state.selectedIds.add(chk.dataset.selectItem);else state.selectedIds.delete(chk.dataset.selectItem);updateSelectionUI()}
 });
-$("bulkDeleteBtn").addEventListener("click",bulkDeleteItems);$("addItemBtn").addEventListener("click",()=>openItem());$("importExcelBtn").addEventListener("click",openImportModal);$("borrowItemBtn").addEventListener("click",openBorrowModal);$("returnItemBtn").addEventListener("click",()=>openReturnModal());$("newRequestBtn").addEventListener("click",openRequest);$("modalClose").addEventListener("click",closeModal);$("modalCancel").addEventListener("click",closeModal);$("modalForm").addEventListener("submit",submitModal);$("modalBackdrop").addEventListener("click",e=>{if(e.target===$("modalBackdrop"))closeModal()});$("inventorySearch").addEventListener("input",()=>{const s=document.querySelector(".table-scroll");if(s)s.scrollLeft=0;renderInventory()});$("categoryFilter").addEventListener("change",renderInventory);$("stockFilter").addEventListener("change",renderInventory);$("dateFilter").addEventListener("change",renderInventory);$("transactionSearch").addEventListener("input",renderTransactions);$("transactionFilter").addEventListener("change",renderTransactions);$("requestSearch").addEventListener("input",renderRequests);$("requestFilter").addEventListener("change",renderRequests);$("historySearch").addEventListener("input",renderHistory);$("historyFilter").addEventListener("change",renderHistory);$("exportBtn").addEventListener("click",exportCSV);$("menuToggle").addEventListener("click",()=>$("sidebar").classList.add("open"));$("closeSidebar").addEventListener("click",()=>$("sidebar").classList.remove("open"));
+$("bulkDeleteBtn").addEventListener("click",bulkDeleteItems);$("addItemBtn").addEventListener("click",()=>openItem());$("importExcelBtn").addEventListener("click",openImportModal);$("borrowItemBtn").addEventListener("click",openBorrowModal);$("returnItemBtn").addEventListener("click",()=>openReturnModal());$("newRequestBtn").addEventListener("click",openRequest);if($("newMaintenanceBtn"))$("newMaintenanceBtn").addEventListener("click",openMaintenanceModal);$("modalClose").addEventListener("click",closeModal);$("modalCancel").addEventListener("click",closeModal);$("modalForm").addEventListener("submit",submitModal);$("modalBackdrop").addEventListener("click",e=>{if(e.target===$("modalBackdrop"))closeModal()});
+if($("closeSlipModal"))$("closeSlipModal").addEventListener("click",closeSlipModal);
+if($("dismissSlipBtn"))$("dismissSlipBtn").addEventListener("click",closeSlipModal);
+if($("printSlipBtn"))$("printSlipBtn").addEventListener("click",()=>window.print());
+if($("slipModalBackdrop"))$("slipModalBackdrop").addEventListener("click",e=>{if(e.target===$("slipModalBackdrop"))closeSlipModal()});
+function openHelpModal(){$("helpModalBackdrop")?.classList.remove("hidden")}
+function closeHelpModal(){$("helpModalBackdrop")?.classList.add("hidden")}
+if($("helpBtn"))$("helpBtn").addEventListener("click",openHelpModal);
+if($("closeHelpModal"))$("closeHelpModal").addEventListener("click",closeHelpModal);
+if($("dismissHelpBtn"))$("dismissHelpBtn").addEventListener("click",closeHelpModal);
+if($("helpModalBackdrop"))$("helpModalBackdrop").addEventListener("click",e=>{if(e.target===$("helpModalBackdrop"))closeHelpModal()});
+if($("clearDateFilterBtn")){
+ $("clearDateFilterBtn").addEventListener("click",()=>{
+  if($("dateFilter"))$("dateFilter").value="";
+  renderInventory();
+ });
+}
+$("inventorySearch").addEventListener("input",()=>{const s=document.querySelector(".table-scroll");if(s)s.scrollLeft=0;renderInventory()});$("categoryFilter").addEventListener("change",renderInventory);$("stockFilter").addEventListener("change",renderInventory);$("dateFilter").addEventListener("change",renderInventory);$("transactionSearch").addEventListener("input",renderTransactions);$("transactionFilter").addEventListener("change",renderTransactions);$("requestSearch").addEventListener("input",renderRequests);$("requestFilter").addEventListener("change",renderRequests);if($("maintenanceSearch"))$("maintenanceSearch").addEventListener("input",renderMaintenance);if($("maintenanceFilter"))$("maintenanceFilter").addEventListener("change",renderMaintenance);if($("accessSearch"))$("accessSearch").addEventListener("input",renderAccessRequests);if($("accessFilter"))$("accessFilter").addEventListener("change",()=>{if($("accessFilter").value!=="registered_users"&&$("accessUserSelect")){$("accessUserSelect").value=""}renderAccessRequests()});if($("accessUserSelect"))$("accessUserSelect").addEventListener("change",()=>{if($("accessUserSelect").value&&$("accessFilter")){$("accessFilter").value="registered_users"}renderAccessRequests()});$("historySearch").addEventListener("input",renderHistory);$("historyFilter").addEventListener("change",renderHistory);$("exportBtn").addEventListener("click",exportCSV);$("menuToggle").addEventListener("click",()=>$("sidebar").classList.add("open"));$("closeSidebar").addEventListener("click",()=>$("sidebar").classList.remove("open"));
 boot();

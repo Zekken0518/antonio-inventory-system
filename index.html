@@ -15,17 +15,66 @@
 </head>
 <body>
   <div id="loginScreen" class="login-screen">
-    <form id="loginForm" class="login-card">
+    <div class="login-card">
       <div class="brand-mark large">SA</div>
       <p class="eyebrow">SAN ANTONIO HIGH SCHOOL</p>
       <h1>Inventory Portal</h1>
-      <p class="muted">Sign in with your school inventory account.</p>
-      <label>Email address<input id="loginEmail" type="email" autocomplete="username" required placeholder="name@school.edu"></label>
-      <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter your password"></label>
-      <button class="primary-btn full" type="submit">Sign in</button>
-      <p id="loginError" class="form-error"></p>
-      <p class="login-note">Accounts are created by your system administrator.</p>
-    </form>
+      <p class="muted">School Property &amp; Supply Custodian System</p>
+
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" id="tabSignIn">Sign In</button>
+        <button type="button" class="auth-tab" id="tabRegister">Register Credentials</button>
+      </div>
+
+      <!-- Sign In Form -->
+      <form id="loginForm">
+        <label>Email address<input id="loginEmail" type="email" autocomplete="username" required placeholder="name@school.edu"></label>
+        <label>Password<input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter your password"></label>
+        <button class="primary-btn full" type="submit">Sign in</button>
+        <p id="loginError" class="form-error"></p>
+        <div class="login-access-box">
+          <span>First time here?</span>
+          <button type="button" class="request-access-link" id="switchToRegisterBtn">Register credentials for staff access →</button>
+        </div>
+      </form>
+
+      <!-- Register Form -->
+      <form id="registerForm" class="hidden">
+        <label>Full Name<input id="regFullName" type="text" required placeholder="e.g. Maria Clara Santos"></label>
+        <label>Email address<input id="regEmail" type="email" autocomplete="username" required placeholder="name@school.edu"></label>
+        <label>Password (min 6 characters)<input id="regPassword" type="password" autocomplete="new-password" required minlength="6" placeholder="Choose a password"></label>
+        <label>Department / Assignment<input id="regDepartment" type="text" placeholder="e.g. Science Dept, Property Office"></label>
+        <button class="primary-btn full" type="submit" id="regSubmitBtn">Submit Credentials &amp; Request Staff Access</button>
+        <p id="registerError" class="form-error"></p>
+        <p class="muted" style="font-size:10px;margin-top:10px;line-height:1.4">Once registered, your request is listed in the Developer's dashboard. When the Developer confirms, you will receive full Staff access.</p>
+        <div class="login-access-box">
+          <span>Already registered?</span>
+          <button type="button" class="request-access-link" id="switchToSignInBtn">← Back to Sign In</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="pendingScreen" class="login-screen hidden">
+    <div class="login-card" style="width:min(440px,95%)">
+      <div class="brand-mark large" style="background:linear-gradient(145deg,#d99118,#f59e0b)">⏳</div>
+      <p class="eyebrow">SAN ANTONIO HIGH SCHOOL</p>
+      <h1>Awaiting Developer Confirmation</h1>
+      <p class="muted" style="line-height:1.6;margin-bottom:16px">
+        Hello, <strong id="pendingUserName">Staff Applicant</strong>!<br>
+        Your credentials have been submitted and sent to the <strong>Developer's Dashboard (Access Requests)</strong>.
+      </p>
+      <div style="background:#fff9eb;border:1px solid #fed7aa;border-radius:10px;padding:12px;font-size:11px;color:#9a3412;margin-bottom:18px;text-align:left">
+        <strong>Status: Pending Developer Review</strong>
+        <p style="margin:4px 0 0;font-size:10.5px;color:#b45309">
+          The developer has a <strong>[Confirm]</strong> button in their dashboard to grant your account full <strong>Staff Custodian</strong> access. Once confirmed, click "Check Status" below or log in again.
+        </p>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button type="button" class="secondary-btn full" id="pendingSignOutBtn">Sign Out</button>
+        <button type="button" class="primary-btn full" id="pendingRefreshBtn">Check Status ↻</button>
+      </div>
+    </div>
   </div>
 
   <div id="app" class="app-shell hidden">
@@ -39,13 +88,14 @@
       <nav id="mainNav">
         <button class="nav-item active" data-page="dashboard"><span class="nav-icon">⌂</span>Dashboard</button>
         <button class="nav-item" data-page="inventory"><span class="nav-icon">▦</span>Inventory</button>
-        <button class="nav-item" data-page="transactions"><span class="nav-icon">⇄</span>Borrow/Return</button>
-        <button class="nav-item" data-page="requests"><span class="nav-icon">▤</span>Requests <span id="requestNavCount" class="nav-count">0</span></button>
+        <button class="nav-item" data-page="transactions"><span class="nav-icon">⇄</span>Borrow/Return <span id="borrowNavCount" class="nav-count hidden">0</span></button>
+        <button class="nav-item" data-page="requests"><span class="nav-icon">▤</span>Supply Requisition <span id="requestNavCount" class="nav-count">0</span></button>
+        <button class="nav-item" data-page="maintenance"><span class="nav-icon">🛠</span>Maintenance <span id="maintenanceNavCount" class="nav-count hidden">0</span></button>
         <button class="nav-item" data-page="history"><span class="nav-icon">◷</span>History</button>
         <button class="nav-item" data-page="reports"><span class="nav-icon">▥</span>Reports</button>
+        <button class="nav-item admin-only hidden" id="accessRequestsNavItem" data-page="access_requests"><span class="nav-icon">👥</span>Access Requests <span id="accessNavCount" class="nav-count danger-tag hidden">0</span></button>
       </nav>
       <div class="sidebar-bottom">
-        <div class="help-card"><div class="help-icon">?</div><strong>Need assistance?</strong><p>Contact your inventory administrator for account or stock issues.</p></div>
         <button id="logoutBtn" class="nav-item logout"><span class="nav-icon">↪</span>Sign out</button>
       </div>
     </aside>
@@ -56,6 +106,9 @@
         <div class="breadcrumbs">Workspace <span>/</span> <strong id="crumb">Dashboard</strong></div>
         <div class="top-actions">
           <div class="connection"><i></i><span>Connected</span></div>
+          <button class="icon-btn support-btn" id="helpBtn" title="Customer Service &amp; Help Desk" aria-label="Customer Service">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle"><path d="M3 18v-6a9 9 0 0 1 18 0v6"></path><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path></svg>
+          </button>
           <button class="icon-btn" id="refreshBtn" title="Refresh data">↻</button>
           <div class="user-chip"><div class="avatar" id="avatar">A</div><div><strong id="userName">Administrator</strong><small id="userRole">School staff</small></div></div>
         </div>
@@ -70,33 +123,106 @@
           <div class="stat-grid">
             <article class="stat-card"><div class="stat-top"><span>Total items</span><span class="stat-icon blue">▦</span></div><strong id="statTotal">0</strong><small class="stat-foot">Unique inventory records</small></article>
             <article class="stat-card"><div class="stat-top"><span>Available items</span><span class="stat-icon green">✓</span></div><strong id="statStock">0</strong><small class="stat-foot">Ready to borrow</small></article>
-            <article class="stat-card"><div class="stat-top"><span>Borrowed items</span><span class="stat-icon amber">⇄</span></div><strong id="statLow">0</strong><small class="stat-foot">Currently borrowed out</small></article>
+            <article class="stat-card"><div class="stat-top"><span>Borrowed items</span><span class="stat-icon amber">⇄</span></div><strong id="statLow">0</strong><small class="stat-foot" id="statBorrowedFoot">Currently borrowed out</small></article>
             <article class="stat-card"><div class="stat-top"><span>Pending requests</span><span class="stat-icon violet">▤</span></div><strong id="statPending">0</strong><small class="stat-foot">Awaiting review</small></article>
           </div>
           <div class="dashboard-grid">
             <article class="panel chart-panel"><div class="panel-heading"><div><h2>Availability overview</h2><p>Current items by availability status</p></div><span class="subtle-tag">Live data</span></div><div class="chart-holder"><canvas id="stockChart"></canvas></div><div class="chart-legend"><span><i class="dot green-dot"></i>Available</span><span><i class="dot red-dot"></i>Borrowed</span></div></article>
             <article class="panel"><div class="panel-heading"><div><h2>Top categories</h2><p>Items grouped by category</p></div><button class="text-btn" data-go="inventory">View inventory →</button></div><div id="categoryList" class="category-list"><div class="empty-state">No inventory data yet.</div></div></article>
             <article class="panel activity-panel"><div class="panel-heading"><div><h2>Recent borrow/return</h2><p>Latest borrowing and return activity</p></div><button class="text-btn" data-go="transactions">View all →</button></div><div id="recentTransactions" class="activity-list"><div class="empty-state">No borrow/return activity yet.</div></div></article>
-            <article class="panel quick-panel"><div class="panel-heading"><div><h2>Quick actions</h2><p>Common inventory tasks</p></div></div><button class="quick-action" data-go="inventory"><span class="quick-symbol blue">＋</span><span><strong>Add inventory item</strong><small>Create a new stock record</small></span><b>→</b></button><button class="quick-action" data-go="transactions"><span class="quick-symbol green">⇄</span><span><strong>Borrow / Return item</strong><small>Borrow an item or process a return</small></span><b>→</b></button><button class="quick-action" data-go="requests"><span class="quick-symbol violet">▤</span><span><strong>Review requests</strong><small>Process school supply requests</small></span><b>→</b></button></article>
+            <article class="panel quick-panel"><div class="panel-heading"><div><h2>Quick actions</h2><p>Common inventory tasks</p></div></div><button class="quick-action" data-go="inventory"><span class="quick-symbol blue">＋</span><span><strong>Add inventory item</strong><small>Create a new stock record</small></span><b>→</b></button><button class="quick-action" data-go="transactions"><span class="quick-symbol green">⇄</span><span><strong>Borrow / Return item</strong><small>Borrow an item or process a return</small></span><b>→</b></button><button class="quick-action" data-go="requests"><span class="quick-symbol violet">▤</span><span><strong>Supply Requisition (RIS)</strong><small>Issue consumable school supplies</small></span><b>→</b></button><button class="quick-action" data-go="maintenance"><span class="quick-symbol amber">🛠</span><span><strong>Equipment Maintenance</strong><small>Report defects &amp; track repairs</small></span><b>→</b></button></article>
           </div>
         </section>
 
         <section id="inventoryPage" class="page">
           <div class="page-heading"><div><p class="eyebrow">STOCK MANAGEMENT</p><h1>Inventory</h1><p class="muted">Manage school supplies, equipment, and stock levels.</p></div><div class="heading-actions"><button id="bulkDeleteBtn" class="danger-btn hidden">Delete selected (0)</button><button id="importExcelBtn" class="secondary-btn">↑ Import Excel</button><button id="addItemBtn" class="primary-btn">＋ Add item</button></div></div>
-          <div class="toolbar"><div class="search-box">⌕ <input id="inventorySearch" placeholder="Search item, property no., location, accountable person..." /></div><select id="categoryFilter"><option value="">All categories</option></select><select id="stockFilter"><option value="">All statuses</option><option value="available">Available</option><option value="borrowed">Borrowed</option></select><input type="date" id="dateFilter" title="Filter by date entered" /><span id="searchHint" class="search-hint-pill hidden"></span></div>
+          <div class="toolbar"><div class="search-box">⌕ <input id="inventorySearch" placeholder="Search item, property no., location, accountable person..." /></div><select id="categoryFilter"><option value="">All categories</option></select><select id="stockFilter"><option value="">All statuses</option><option value="available">Available</option><option value="borrowed">Borrowed</option></select><div class="date-filter-group" title="Search / filter inventory by Date Entered"><span class="date-filter-label">Date Entered:</span><input type="date" id="dateFilter" aria-label="Search by Date Entered" /><button type="button" id="clearDateFilterBtn" class="clear-date-btn hidden" title="Clear Date Entered filter">×</button></div><span id="searchHint" class="search-hint-pill hidden"></span></div>
           <article class="panel table-panel"><div class="table-scroll"><table><thead><tr id="inventoryHeadRow"><th class="check-col"><input type="checkbox" id="selectAllInventory" title="Select all visible items" /></th><th>NO</th><th>DATE ENTERED</th><th>ENTERED BY</th><th>SCHOOL ID</th><th>DISTRICT</th><th>SCHOOL NAME</th><th>OLD PROPERTY NO.</th><th>NEW PROPERTY NO.</th><th>SERIAL NO. / TITLE NO.</th><th>MODEL NO.</th><th>DATE ACQUIRED (mm/dd/yyyy)</th><th>UACS</th><th>ACCOUNT CATEGORY</th><th>ACCOUNT CLASSIFICATION</th><th>ACCOUNT TITLE</th><th>ARTICLE / ITEM</th><th>DESCRIPTION</th><th>CATEGORY</th><th>UNIT OF MEASURE</th><th>UNIT VALUE</th><th>QTY (PROPERTY CARD)</th><th>QTY (PHYSICAL COUNT)</th><th>LOCATION / WHEREABOUTS</th><th>CONDITION</th><th>USEFUL LIFE</th><th>REMARKS</th><th>AVAILABLE DOCUMENTS</th><th>FUND SOURCE</th><th>FUND</th><th>ACCOUNTABLE HRIS-ID</th><th>ACCOUNTABLE PERSON</th><th>STATUS</th><th class="actions-col">ACTIONS</th></tr></thead><tbody id="inventoryBody"><tr><td colspan="34" class="empty-state">Loading inventory...</td></tr></tbody></table></div><div class="table-footer" id="inventoryFooter"></div></article>
         </section>
 
         <section id="transactionsPage" class="page">
           <div class="page-heading"><div><p class="eyebrow">ITEM LENDING</p><h1>Borrow/Return</h1><p class="muted">Track borrowed items, who borrowed them, reason for borrowing, and expected return dates.</p></div><div class="heading-actions"><button id="returnItemBtn" class="secondary-btn">↩ Return</button><button id="borrowItemBtn" class="primary-btn">＋ Borrow</button></div></div>
-          <div class="toolbar"><div class="search-box">⌕ <input id="transactionSearch" placeholder="Search borrowed item, borrower name, or reason..." /></div><select id="transactionFilter"><option value="borrowed">Currently borrowed</option><option value="all">All borrow &amp; return records</option><option value="returned">Returned items</option></select></div>
+          <div class="toolbar"><div class="search-box">⌕ <input id="transactionSearch" placeholder="Search borrowed item, borrower name, or reason..." /></div><select id="transactionFilter"><option value="borrowed">Currently borrowed</option><option value="overdue">⚠ Overdue only</option><option value="all">All borrow &amp; return records</option><option value="returned">Returned items</option></select></div>
           <article class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>ITEM</th><th>WHO BORROWED</th><th>REASON FOR BORROWING</th><th>DATE BORROWED</th><th>EXPECTED DATE TO RETURN</th><th>STATUS</th><th class="actions-col">ACTION</th></tr></thead><tbody id="transactionsBody"></tbody></table></div></article>
         </section>
 
         <section id="requestsPage" class="page">
-          <div class="page-heading"><div><p class="eyebrow">SUPPLY WORKFLOW</p><h1>Requests</h1><p class="muted">Review and process requests for school inventory.</p></div><button id="newRequestBtn" class="primary-btn">＋ New request</button></div>
-          <div class="toolbar"><div class="search-box">⌕ <input id="requestSearch" placeholder="Search requester or item..." /></div><select id="requestFilter"><option value="">All requests</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="fulfilled">Fulfilled</option><option value="rejected">Rejected</option></select></div>
-          <article class="panel table-panel"><div class="table-scroll"><table><thead><tr><th>REQUESTED</th><th>REQUESTER</th><th>ITEM</th><th>QUANTITY</th><th>STATUS</th><th>NOTE</th><th>ACTION</th></tr></thead><tbody id="requestsBody"></tbody></table></div></article>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">DEPED RIS WORKFLOW</p>
+              <h1>Supply Requisition</h1>
+              <p class="muted">Requisition consumable supplies (bond paper, ink, chalk, markers, cleaning items).</p>
+            </div>
+            <button id="newRequestBtn" class="primary-btn">＋ New requisition</button>
+          </div>
+          <div class="toolbar">
+            <div class="search-box">⌕ <input id="requestSearch" placeholder="Search requisitioner, department, supply item, or purpose..." /></div>
+            <select id="requestFilter">
+              <option value="">All requisitions</option>
+              <option value="pending">Pending review</option>
+              <option value="approved">Approved (Awaiting release)</option>
+              <option value="fulfilled">Fulfilled (Stock issued)</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+          <article class="panel table-panel">
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>DATE</th>
+                    <th>REQUISITIONER</th>
+                    <th>SUPPLY ITEM</th>
+                    <th>QTY REQUESTED</th>
+                    <th>AVAILABLE STOCK</th>
+                    <th>PURPOSE / REMARKS</th>
+                    <th>STATUS</th>
+                    <th class="actions-col">ACTION</th>
+                  </tr>
+                </thead>
+                <tbody id="requestsBody"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <section id="maintenancePage" class="page">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">ASSET UPKEEP &amp; SERVICING</p>
+              <h1>Maintenance &amp; Repairs</h1>
+              <p class="muted">Track damaged, defective, or unserviceable equipment undergoing repair, servicing, or condemnation.</p>
+            </div>
+            <button id="newMaintenanceBtn" class="primary-btn">＋ Report repair / defect</button>
+          </div>
+          <div class="toolbar">
+            <div class="search-box">⌕ <input id="maintenanceSearch" placeholder="Search equipment, property no., reported issue, or technician..." /></div>
+            <select id="maintenanceFilter">
+              <option value="">All repair logs</option>
+              <option value="pending">Pending repair</option>
+              <option value="in_repair">Under service / In repair</option>
+              <option value="repaired">Repaired &amp; restored</option>
+              <option value="condemned">Condemned / Beyond repair</option>
+            </select>
+          </div>
+          <article class="panel table-panel">
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>DATE REPORTED</th>
+                    <th>EQUIPMENT / PROPERTY</th>
+                    <th>DEFECT / REPORTED ISSUE</th>
+                    <th>REPORTED BY</th>
+                    <th>TECHNICIAN / REMARKS</th>
+                    <th>REPAIR STATUS</th>
+                    <th class="actions-col">ACTION</th>
+                  </tr>
+                </thead>
+                <tbody id="maintenanceBody"></tbody>
+              </table>
+            </div>
+          </article>
         </section>
 
         <section id="historyPage" class="page">
@@ -109,6 +235,51 @@
           <div class="page-heading"><div><p class="eyebrow">INSIGHTS</p><h1>Reports</h1><p class="muted">A quick summary of your current inventory position.</p></div><button id="exportBtn" class="secondary-btn">↓ Export inventory CSV</button></div>
           <div class="report-grid"><article class="panel"><h2>Inventory summary</h2><div id="reportSummary" class="report-summary"></div></article><article class="panel"><h2>Category breakdown</h2><div id="reportCategories" class="category-list"></div></article></div>
         </section>
+
+        <section id="access_requestsPage" class="page">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">SECURITY &amp; USER MANAGEMENT</p>
+              <h1>Access Requests</h1>
+              <p class="muted">Review registration requests from teachers and staff seeking access to the system.</p>
+            </div>
+            <div class="heading-actions">
+              <button id="refreshAccessBtn" class="secondary-btn">↻ Refresh requests</button>
+            </div>
+          </div>
+          <div class="toolbar">
+            <div class="search-box">⌕ <input id="accessSearch" placeholder="Search applicant name, email, department, or reason..." /></div>
+            <select id="accessFilter">
+              <option value="pending">Pending requests only</option>
+              <option value="">All requests (Pending, Approved, Rejected)</option>
+              <option value="registered_users">👥 All Registered Accounts (User Profiles)</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </select>
+            <select id="accessUserSelect" style="max-width:320px" title="Filter by registered account">
+              <option value="">All Registered Accounts</option>
+            </select>
+          </div>
+          <article class="panel table-panel">
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>DATE REQUESTED</th>
+                    <th>APPLICANT NAME</th>
+                    <th>EMAIL ADDRESS</th>
+                    <th>DEPARTMENT / POSITION</th>
+                    <th>REQUESTED ROLE</th>
+                    <th>PURPOSE / REASON</th>
+                    <th>STATUS</th>
+                    <th class="actions-col">ADMIN ACTION</th>
+                  </tr>
+                </thead>
+                <tbody id="accessRequestsBody"><tr><td colspan="8" class="empty-state">Loading access requests...</td></tr></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
       </section>
       <footer class="footer">© <span id="year"></span> San Antonio High School · Inventory Management System</footer>
     </main>
@@ -116,6 +287,104 @@
 
   <div id="modalBackdrop" class="modal-backdrop hidden">
     <div class="modal-card"><div class="modal-heading"><div><p class="eyebrow" id="modalEyebrow">INVENTORY</p><h2 id="modalTitle">Add item</h2></div><button id="modalClose" class="icon-btn" aria-label="Close">×</button></div><form id="modalForm"><div id="modalFields" class="form-grid"></div><p id="modalError" class="form-error"></p><div class="modal-actions"><button type="button" id="modalCancel" class="secondary-btn">Cancel</button><button type="submit" class="primary-btn" id="modalSubmit">Save changes</button></div></form></div>
+  </div>
+
+  <div id="slipModalBackdrop" class="modal-backdrop hidden">
+    <div class="modal-card slip-modal-card">
+      <div class="modal-heading no-print">
+        <div><p class="eyebrow" id="slipModalEyebrow">OFFICIAL DEPED FORM</p><h2 id="slipModalTitle">Official Form</h2></div>
+        <button id="closeSlipModal" class="icon-btn" aria-label="Close">×</button>
+      </div>
+      <div id="borrowSlipPrintArea"></div>
+      <div class="modal-actions no-print" style="margin-top:20px">
+        <button type="button" id="dismissSlipBtn" class="secondary-btn">Close</button>
+        <button type="button" id="printSlipBtn" class="primary-btn">🖶 Print / Save PDF</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="helpModalBackdrop" class="modal-backdrop hidden">
+    <div class="modal-card help-modal-card">
+      <div class="modal-heading">
+        <div>
+          <p class="eyebrow">CUSTOMER SERVICE &amp; SUPPORT</p>
+          <h2>Need Assistance?</h2>
+        </div>
+        <button id="closeHelpModal" class="icon-btn" aria-label="Close">×</button>
+      </div>
+      <div class="help-modal-body">
+        <div class="help-banner">
+          <div class="help-banner-icon">🎧</div>
+          <div>
+            <strong>San Antonio High School Help Desk</strong>
+            <p class="muted">Asset Tracking, Stock Requisitions, &amp; System Administration</p>
+          </div>
+        </div>
+        <div class="help-section">
+          <strong>Contact Administrator / Property Custodian:</strong>
+          <p>If you encounter issues with your account, need elevated staff/admin roles, require password resets, or need assistance reconciling physical inventory counts and ICF records, please reach out to the school's designated personnel:</p>
+          <div class="help-school-info">
+            <div><span>School ID:</span> <strong>303812</strong></div>
+            <div><span>School:</span> <strong>SAN ANTONIO NATIONAL HIGH SCHOOL</strong></div>
+            <div><span>District:</span> <strong>Ramon Magsaysay</strong></div>
+            <div><span>Division:</span> <strong>Zamboanga del Sur</strong></div>
+            <div><span>Office:</span> <strong>Property &amp; Supply Custodian Office</strong></div>
+          </div>
+        </div>
+        <div class="help-section">
+          <strong>Quick User Help:</strong>
+          <ul class="help-list">
+            <li><strong>Inventory:</strong> Search all 28 DepEd ICF columns. Use the <em>Date Entered</em> filter or column priority search.</li>
+            <li><strong>Borrow / Return:</strong> Lend equipment, track expected return dates, view overdue notices, and print official Equipment Borrower Slips.</li>
+            <li><strong>Supply Requisition:</strong> Requisition consumables (paper, ink, chalk) and generate standard DepEd RIS Form 45 / Appendix 63 slips.</li>
+            <li><strong>Maintenance &amp; Repairs:</strong> Report equipment defects and track repair statuses until restored or condemned.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="modal-actions" style="margin-top:20px">
+        <button type="button" id="dismissHelpBtn" class="primary-btn">Got it, thanks!</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="requestAccessModalBackdrop" class="modal-backdrop hidden">
+    <div class="modal-card" style="width:min(540px,95%)">
+      <div class="modal-heading">
+        <div>
+          <p class="eyebrow">PORTAL REGISTRATION</p>
+          <h2>Request Portal Access</h2>
+        </div>
+        <button id="closeRequestAccessModal" class="icon-btn" aria-label="Close">×</button>
+      </div>
+      <form id="requestAccessForm">
+        <p class="muted" style="margin-bottom:16px">Teachers and school personnel can request an account. Your request will be routed directly to the System Administrator for approval.</p>
+        <div class="form-grid">
+          <label class="full-field">Full Name (First &amp; Last Name)
+            <input type="text" id="reqAccFullName" required placeholder="e.g. Maria Clara Santos" />
+          </label>
+          <label class="full-field">Email Address
+            <input type="email" id="reqAccEmail" required placeholder="e.g. maria.santos@deped.gov.ph" />
+          </label>
+          <label>Department / Grade Level / Assignment
+            <input type="text" id="reqAccDepartment" required placeholder="e.g. Grade 9 Science / English Dept" />
+          </label>
+          <label>Desired Role
+            <select id="reqAccRole">
+              <option value="teacher">Teacher (Borrow items &amp; request supplies)</option>
+              <option value="staff">Staff / Custodian (Manage inventory &amp; loans)</option>
+            </select>
+          </label>
+          <label class="full-field">Reason / Purpose for Request
+            <textarea id="reqAccReason" placeholder="State your subject, room assignment, or need for access..." required></textarea>
+          </label>
+        </div>
+        <p id="requestAccessError" class="form-error"></p>
+        <div class="modal-actions" style="margin-top:16px">
+          <button type="button" id="cancelRequestAccessBtn" class="secondary-btn">Cancel</button>
+          <button type="submit" id="submitRequestAccessBtn" class="primary-btn">Submit Access Request</button>
+        </div>
+      </form>
+    </div>
   </div>
   <div id="toast" class="toast"></div>
   <script src="app.js"></script>
