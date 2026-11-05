@@ -1,4 +1,4 @@
-/* San Antonio High School Inventory System
+/* Antonio High School Inventory System
    Configure SUPABASE_URL and SUPABASE_ANON_KEY below before use.
 */
 const SUPABASE_URL = "https://slwujrkglwopzfhlpinv.supabase.co";
@@ -581,7 +581,8 @@ function renderAccessRequests(){
     actionCol=`<span class="muted" style="font-size:11px">Current Active Account (${(u.role||"admin").toUpperCase()})</span>`;
    }else{
     actionCol=`<div class="row-actions">
-     ${u.role!=="staff"?`<button class="mini-btn btn-confirm" data-change-role="staff" data-user-id="${u.id}" title="Grant Staff Custodian permissions">Make Staff</button>`:""}
+     <button class="mini-btn" data-reset-password="${u.id}" title="Set new password for this user">🔑 Password</button>
+      ${u.role!=="staff"?`<button class="mini-btn btn-confirm" data-change-role="staff" data-user-id="${u.id}" title="Grant Staff Custodian permissions">Make Staff</button>`:""}
      ${u.role!=="teacher"?`<button class="mini-btn" data-change-role="teacher" data-user-id="${u.id}" title="Assign Teacher role">Make Teacher</button>`:""}
      ${u.role!=="admin"?`<button class="mini-btn" data-change-role="admin" data-user-id="${u.id}" title="Promote to Administrator">Make Admin</button>`:""}
      ${["staff","admin"].includes(u.role)?`<button class="mini-btn btn-cancel" data-change-role="requester" data-user-id="${u.id}" title="Revoke access">Revoke</button>`:""}
@@ -620,6 +621,7 @@ function renderAccessRequests(){
    actionCol=`<div class="row-actions">
     <button class="mini-btn btn-confirm" data-access-action="approved" data-access-role="staff" data-id="${r.id}" title="Confirm and grant staff access">✓ Confirm Staff Access</button>
     <button class="mini-btn btn-cancel" data-access-action="rejected" data-id="${r.id}" title="Cancel request">✕ Cancel</button>
+    ${r.user_id?`<button class="mini-btn" data-reset-password="${r.user_id}" title="Set user password">🔑 Password</button>`:""}
    </div>`;
   }else if(r.status==="approved"){
    actionCol=`<div class="row-actions">
@@ -645,6 +647,27 @@ function renderAccessRequests(){
   </tr>`;
  }).join("");
 }
+async function adminResetUserPassword(userId){
+ if(!isAdmin()){toast("Developer or Administrator privileges required.");return}
+ const u=(state.profilesList||[]).find(x=>x.id===userId)||{full_name:"User",email:""};
+ const label=u.full_name+(u.email?" ("+u.email+")":"");
+ const newPass=prompt("Enter new password for "+label+":\n\n(Minimum 6 characters)");
+ if(newPass===null)return;
+ const cleanPass=newPass.trim();
+ if(cleanPass.length<6){alert("Password must be at least 6 characters long.");return}
+ try{
+  const res=await db.rpc("admin_reset_user_password",{p_user_id:userId,p_new_password:cleanPass});
+  if(res.error)throw res.error;
+  if(res.data&&!res.data.success)throw new Error(res.data.error||"Password update failed");
+
+  toast("Password updated for "+u.full_name);
+  alert("✓ Password successfully updated for "+u.full_name+"!\n\nNew Password: "+cleanPass+"\n\nYou can give this password directly to the user so they can sign in.");
+ }catch(e){
+  toast("Password reset failed: "+e.message);
+  alert("Could not reset password: "+e.message+"\n\nPlease ensure you ran the SQL function admin_reset_user_password in Supabase SQL editor.");
+  console.error(e);
+ }
+}
 async function changeUserRole(userId, newRole){
  if(!isAdmin()){toast("Developer or Administrator privileges required.");return}
  const u=(state.profilesList||[]).find(x=>x.id===userId);
@@ -665,12 +688,7 @@ async function changeUserRole(userId, newRole){
     .or(`user_id.eq.${userId},email.eq.${u?.email||""}`);
   }catch(err){console.warn("access_requests sync:",err.message)}
 
-  await logAudit({
-   action:"updated",
-   item_name:`User Role (${name})`,
-   item_code:newRole,
-   details:`Role updated to ${newRole} by ${actorName()}`
-  });
+
 
   toast(`Updated: ${name} is now ${newRole.toUpperCase()}`);
   await loadAll();
@@ -727,12 +745,7 @@ async function accessRequestAction(id, action, targetRole="staff"){
    toast(`Request for ${req.full_name} was cancelled.`);
   }
 
-  await logAudit({
-   action:"updated",
-   item_name:`Staff Access (${req.full_name})`,
-   item_code:targetRole,
-   details:`Staff access request for ${req.email} was marked as ${action==="approved"?"confirmed":"cancelled"}`
-  });
+
 
   await loadAll();
  }catch(e){
@@ -740,10 +753,20 @@ async function accessRequestAction(id, action, targetRole="staff"){
   console.error(e);
  }
 }
+function isInventoryLog(h){
+ const n=(h.item_name||"").toLowerCase();
+ const d=(h.details||"").toLowerCase();
+ if(n.includes("password reset")||d.includes("password reset")||d.includes("password was updated")||d.includes("password"))return false;
+ if(n.includes("user role")||d.includes("role updated")||d.includes("role changed"))return false;
+ if(n.includes("staff access")||n.includes("access request")||d.includes("access request")||d.includes("staff access"))return false;
+ return true;
+}
 function renderHistory(){
  const el=$("historyBody");if(!el)return;
  const q=($("historySearch")?.value||"").toLowerCase(),f=$("historyFilter")?.value||"";
- const rows=state.history.filter(h=>(`${h.item_name||""} ${h.item_code||""} ${h.details||""} ${h.actor_name||""}`.toLowerCase().includes(q))&&(!f||h.action===f));
+ const rows=state.history
+  .filter(isInventoryLog)
+  .filter(h=>((`${h.item_name||""} ${h.item_code||""} ${h.details||""} ${h.actor_name||""}`.toLowerCase().includes(q)))&&(!f||h.action===f));
  el.innerHTML=rows.length?rows.map(h=>`<tr><td>${dateTime(h.created_at)}</td><td>${statusBadge(h.action)}</td><td><strong>${esc(h.item_name)}</strong></td><td>${esc(h.item_code||"—")}</td><td>${esc(h.details||"—")}</td><td><strong>${esc(h.actor_name||"User")}</strong></td></tr>`).join(""):'<tr><td colspan="6" class="empty-state">No history logs found.</td></tr>';
 }
 function renderReports(){const total=state.inventory.length,borrowed=state.inventory.filter(x=>statusFor(x)==="borrowed").length,available=Math.max(0,total-borrowed),qty=state.inventory.reduce((s,x)=>s+Number(x.quantity||0),0);$("reportSummary").innerHTML=[["Unique item records",total],["Available items",available],["Borrowed items",borrowed],["Total physical count",qty],["Pending requests",state.requests.filter(x=>x.status==="pending").length]].map(([a,b])=>`<div class="report-line"><span>${a}</span><strong>${number(b)}</strong></div>`).join("");const cats={};state.inventory.forEach(x=>cats[x.category||"Uncategorized"]=(cats[x.category||"Uncategorized"]||0)+1);$("reportCategories").innerHTML=Object.entries(cats).sort((a,b)=>b[1]-a[1]).map(([c,n])=>`<div class="category-row"><span>${esc(c)}</span><div class="bar-track"><div class="bar-fill" style="width:${total?n/total*100:0}%"></div></div><strong>${n}</strong></div>`).join("")||'<div class="empty-state">No category data.</div>'}
@@ -756,7 +779,7 @@ function itemFields(){
   {name:"seq_no",label:"NO (Sequence)"},
   {name:"school_id",label:"School ID",value:"303812"},
   {name:"district",label:"District",value:"Ramon Magsaysay"},
-  {name:"school_name",label:"School Name",value:"SAN ANTONIO NATIONAL HIGH SCHOOL"},
+  {name:"school_name",label:"School Name",value:"ANTONIO NATIONAL HIGH SCHOOL"},
   {name:"old_property_no",label:"Old Property No."},
   {name:"item_code",label:"New Property No."},
   {name:"serial_no",label:"Serial No. / Title No."},
@@ -891,11 +914,11 @@ function extractWorkbookRows(wb){
 }
 function downloadTemplate(){
  if(!window.XLSX)return toast("Excel library is still loading.");
- const sample=[{"NO":1,"SCHOOL ID":"303812","DISTRICT":"Ramon Magsaysay","SCHOOL NAME":"SAN ANTONIO NATIONAL HIGH SCHOOL","OLD PROPERTY NO.":"N/A","NEW PROPERTY NO.":"2023-07-001","SERIAL NO. / TITLE NO.":"N/A","MODEL NO.":"N/A","DATE ACQUIRED (mm/dd/yyyy)":"2023-07-10","UACS":"1060503000","ACCOUNT CATEGORY":"Property, Plant and Equipment","ACCOUNT CLASSIFICATION":"Machinery and Equipment","ACCOUNT TITLE":"Information and Communications Technology Equipment","ARTICLE / ITEM":"Television","DESCRIPTION":'Hisense Smart TV 42"',"UNIT OF MEASURE":"Unit","UNIT VALUE":10300,"QUANTITY PER PROPERTY CARD":1,"QUANTITY PER PHYSICAL COUNT":1,"LOCATION / WHEREABOUTS":"G7-Anthurium","CONDITION":"In Good Condition","USEFUL LIFE":"5","REMARKS":"Usable","AVAILABLE DOCUMENTS":"NONE","FUND SOURCE":"Private (Homeroom PTA)","FUND":"Local Cost","ACCOUNTABLE PERSON (Employee HRIS-ID No.)":"5355956","ACCOUNTABLE PERSON (Regular Employee Only)":"Mirar, Rizaneth Gay Damiao"}];
+ const sample=[{"NO":1,"SCHOOL ID":"303812","DISTRICT":"Ramon Magsaysay","SCHOOL NAME":"ANTONIO NATIONAL HIGH SCHOOL","OLD PROPERTY NO.":"N/A","NEW PROPERTY NO.":"2023-07-001","SERIAL NO. / TITLE NO.":"N/A","MODEL NO.":"N/A","DATE ACQUIRED (mm/dd/yyyy)":"2023-07-10","UACS":"1060503000","ACCOUNT CATEGORY":"Property, Plant and Equipment","ACCOUNT CLASSIFICATION":"Machinery and Equipment","ACCOUNT TITLE":"Information and Communications Technology Equipment","ARTICLE / ITEM":"Television","DESCRIPTION":'Hisense Smart TV 42"',"UNIT OF MEASURE":"Unit","UNIT VALUE":10300,"QUANTITY PER PROPERTY CARD":1,"QUANTITY PER PHYSICAL COUNT":1,"LOCATION / WHEREABOUTS":"G7-Anthurium","CONDITION":"In Good Condition","USEFUL LIFE":"5","REMARKS":"Usable","AVAILABLE DOCUMENTS":"NONE","FUND SOURCE":"Private (Homeroom PTA)","FUND":"Local Cost","ACCOUNTABLE PERSON (Employee HRIS-ID No.)":"5355956","ACCOUNTABLE PERSON (Regular Employee Only)":"Mirar, Rizaneth Gay Damiao"}];
  const ws=XLSX.utils.json_to_sheet(sample);
  const wb=XLSX.utils.book_new();
  XLSX.utils.book_append_sheet(wb,ws,"ICF Template");
- XLSX.writeFile(wb,"san-antonio-icf-import-template.xlsx");
+ XLSX.writeFile(wb,"antonio-icf-import-template.xlsx");
 }
 function openImportModal(){
  if(!canManage())return toast("You do not have permission to import inventory.");
@@ -1436,7 +1459,7 @@ function openSlipModal(recordId){
    <div class="slip-header">
     <p>Republic of the Philippines · Department of Education</p>
     <p>Region IX, Zamboanga Peninsula · Schools Division of Zamboanga del Sur</p>
-    <h2>SAN ANTONIO NATIONAL HIGH SCHOOL</h2>
+    <h2>ANTONIO NATIONAL HIGH SCHOOL</h2>
     <p>Ramon Magsaysay, Zamboanga del Sur · School ID: 303812</p>
     <div style="font-size:13px;font-weight:800;letter-spacing:1px;margin-top:8px;text-decoration:underline">EQUIPMENT BORROWER SLIP &amp; GATE PASS</div>
    </div>
@@ -1574,14 +1597,14 @@ function openRISSlipModal(requestId){
    <div class="slip-header">
     <p>Republic of the Philippines · Department of Education</p>
     <p>Region IX, Zamboanga Peninsula · Schools Division of Zamboanga del Sur</p>
-    <h2>SAN ANTONIO NATIONAL HIGH SCHOOL</h2>
+    <h2>ANTONIO NATIONAL HIGH SCHOOL</h2>
     <p>Ramon Magsaysay, Zamboanga del Sur · School ID: 303812</p>
     <div style="font-size:13px;font-weight:800;letter-spacing:1px;margin-top:8px;text-decoration:underline">REQUISITION AND ISSUE SLIP (RIS)</div>
     <div style="font-size:11px;color:#555;font-style:italic;margin-top:2px">Appendix 63 · DepEd Standard Form</div>
    </div>
 
    <div class="slip-meta-grid">
-    <div class="slip-meta-row"><span>Entity / School:</span> <strong>SAN ANTONIO NHS</strong></div>
+    <div class="slip-meta-row"><span>Entity / School:</span> <strong>ANTONIO NHS</strong></div>
     <div class="slip-meta-row"><span>RIS Control No.:</span> <strong>${esc(risNo)}</strong></div>
     <div class="slip-meta-row"><span>Division:</span> <strong>Zamboanga del Sur</strong></div>
     <div class="slip-meta-row"><span>Date Requested:</span> <strong>${esc(date(req.created_at))}</strong></div>
@@ -1704,7 +1727,7 @@ async function maintenanceAction(id,newStatus){
 function exportCSV(){
  const cols=["seq_no","created_at","school_id","district","school_name","old_property_no","item_code","serial_no","model_no","date_acquired","uacs","account_category","account_classification","account_title","article","description","category","unit","unit_value","qty_property_card","quantity","reorder_level","location","condition","useful_life","remarks","available_documents","fund_source","fund","accountable_hris_id","accountable_person","status"];
  const lines=[cols.join(","),...state.inventory.map(x=>cols.map(k=>`"${String(k==="created_at"?toISODate(x[k]):k==="date_acquired"?(formatDateAcquired(x[k])||""):k==="status"?(statusFor(x)==="borrowed"?"Borrowed":"Available"):(x[k]??"")).replace(/"/g,'""')}"`).join(","))];
- const blob=new Blob([lines.join("\n")],{type:"text/csv;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="san-antonio-inventory.csv";a.click();URL.revokeObjectURL(a.href);
+ const blob=new Blob([lines.join("\n")],{type:"text/csv;charset=utf-8"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="antonio-inventory.csv";a.click();URL.revokeObjectURL(a.href);
 }
 function showPendingScreen(user,profile){
  state.user=user;
@@ -1837,6 +1860,7 @@ $("logoutBtn").addEventListener("click",()=>db.auth.signOut());$("refreshBtn").a
  const mAct=e.target.closest("[data-maintenance-action]");if(mAct)maintenanceAction(mAct.dataset.id,mAct.dataset.maintenanceAction);
  const accAct=e.target.closest("[data-access-action]");if(accAct)accessRequestAction(accAct.dataset.id,accAct.dataset.accessAction,accAct.dataset.accessRole);
  const chRole=e.target.closest("[data-change-role]");if(chRole)changeUserRole(chRole.dataset.userId,chRole.dataset.changeRole);
+ const rstPass=e.target.closest("[data-reset-password]");if(rstPass)adminResetUserPassword(rstPass.dataset.resetPassword);
 });
 document.body.addEventListener("change",e=>{
  const all=e.target.closest("#selectAllInventory");

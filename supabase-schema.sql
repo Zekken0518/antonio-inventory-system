@@ -1,4 +1,4 @@
--- San Antonio High School Inventory System
+-- Antonio High School Inventory System
 -- Run this entire script in Supabase > SQL Editor.
 -- Create user accounts in Supabase Authentication first. New profiles default to requester.
 -- Promote trusted staff by running:
@@ -352,6 +352,30 @@ begin
   end if;
 
   return json_build_object('success', true, 'user_id', v_user_id);
+end;
+$$;
+
+-- Secure RPC function allowing Developer / Admin to reset a user's password directly:
+create extension if not exists pgcrypto with schema extensions;
+
+create or replace function public.admin_reset_user_password(p_user_id uuid, p_new_password text)
+returns json language plpgsql security definer set search_path = public, auth, extensions
+as $$
+begin
+  if not (public.current_user_role() in ('admin','developer')) then
+    return json_build_object('success', false, 'error', 'Unauthorized: Admin or Developer only');
+  end if;
+
+  if length(p_new_password) < 6 then
+    return json_build_object('success', false, 'error', 'Password must be at least 6 characters');
+  end if;
+
+  update auth.users
+  set encrypted_password = extensions.crypt(p_new_password, extensions.gen_salt('bf')),
+      updated_at = now()
+  where id = p_user_id;
+
+  return json_build_object('success', true);
 end;
 $$;
 
