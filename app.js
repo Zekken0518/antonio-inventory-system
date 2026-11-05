@@ -374,10 +374,15 @@ function renderInventory(){
  if(hintEl){
   if(q&&matchedColIds.size>0){
    const matchedNames=cols.filter(c=>matchedColIds.has(c.id)).map(c=>c.label);
-   hintEl.textContent=`⚲ Front column: ${matchedNames.join(", ")}`;
+   const labelText = matchedNames.length <= 2 
+     ? `⚲ Front column: ${matchedNames.join(", ")}` 
+     : `⚲ Front column: ${matchedNames.slice(0, 2).join(", ")} (+${matchedNames.length - 2} more)`;
+   hintEl.textContent=labelText;
+   hintEl.title=`Matched columns: ${matchedNames.join(", ")}`;
    hintEl.classList.remove("hidden");
   }else{
    hintEl.textContent="";
+   hintEl.removeAttribute("title");
    hintEl.classList.add("hidden");
   }
  }
@@ -777,7 +782,7 @@ function itemFields(){
  return [
   {name:"created_at",label:"Date entered",type:"date",value:todayISO(),required:true},
   {name:"seq_no",label:"NO (Sequence)"},
-  {name:"school_id",label:"School ID",value:"303812"},
+  {name:"school_id",label:"School ID",value:"303753"},
   {name:"district",label:"District",value:"Ramon Magsaysay"},
   {name:"school_name",label:"School Name",value:"ANTONIO NATIONAL HIGH SCHOOL"},
   {name:"old_property_no",label:"Old Property No."},
@@ -914,7 +919,7 @@ function extractWorkbookRows(wb){
 }
 function downloadTemplate(){
  if(!window.XLSX)return toast("Excel library is still loading.");
- const sample=[{"NO":1,"SCHOOL ID":"303812","DISTRICT":"Ramon Magsaysay","SCHOOL NAME":"ANTONIO NATIONAL HIGH SCHOOL","OLD PROPERTY NO.":"N/A","NEW PROPERTY NO.":"2023-07-001","SERIAL NO. / TITLE NO.":"N/A","MODEL NO.":"N/A","DATE ACQUIRED (mm/dd/yyyy)":"2023-07-10","UACS":"1060503000","ACCOUNT CATEGORY":"Property, Plant and Equipment","ACCOUNT CLASSIFICATION":"Machinery and Equipment","ACCOUNT TITLE":"Information and Communications Technology Equipment","ARTICLE / ITEM":"Television","DESCRIPTION":'Hisense Smart TV 42"',"UNIT OF MEASURE":"Unit","UNIT VALUE":10300,"QUANTITY PER PROPERTY CARD":1,"QUANTITY PER PHYSICAL COUNT":1,"LOCATION / WHEREABOUTS":"G7-Anthurium","CONDITION":"In Good Condition","USEFUL LIFE":"5","REMARKS":"Usable","AVAILABLE DOCUMENTS":"NONE","FUND SOURCE":"Private (Homeroom PTA)","FUND":"Local Cost","ACCOUNTABLE PERSON (Employee HRIS-ID No.)":"5355956","ACCOUNTABLE PERSON (Regular Employee Only)":"Mirar, Rizaneth Gay Damiao"}];
+ const sample=[{"NO":1,"SCHOOL ID":"303753","DISTRICT":"Ramon Magsaysay","SCHOOL NAME":"ANTONIO NATIONAL HIGH SCHOOL","OLD PROPERTY NO.":"N/A","NEW PROPERTY NO.":"2023-07-001","SERIAL NO. / TITLE NO.":"N/A","MODEL NO.":"N/A","DATE ACQUIRED (mm/dd/yyyy)":"2023-07-10","UACS":"1060503000","ACCOUNT CATEGORY":"Property, Plant and Equipment","ACCOUNT CLASSIFICATION":"Machinery and Equipment","ACCOUNT TITLE":"Information and Communications Technology Equipment","ARTICLE / ITEM":"Television","DESCRIPTION":'Hisense Smart TV 42"',"UNIT OF MEASURE":"Unit","UNIT VALUE":10300,"QUANTITY PER PROPERTY CARD":1,"QUANTITY PER PHYSICAL COUNT":1,"LOCATION / WHEREABOUTS":"G7-Anthurium","CONDITION":"In Good Condition","USEFUL LIFE":"5","REMARKS":"Usable","AVAILABLE DOCUMENTS":"NONE","FUND SOURCE":"Private (Homeroom PTA)","FUND":"Local Cost","ACCOUNTABLE PERSON (Employee HRIS-ID No.)":"5355956","ACCOUNTABLE PERSON (Regular Employee Only)":"Mirar, Rizaneth Gay Damiao"}];
  const ws=XLSX.utils.json_to_sheet(sample);
  const wb=XLSX.utils.book_new();
  XLSX.utils.book_append_sheet(wb,ws,"ICF Template");
@@ -1460,7 +1465,7 @@ function openSlipModal(recordId){
     <p>Republic of the Philippines · Department of Education</p>
     <p>Region IX, Zamboanga Peninsula · Schools Division of Zamboanga del Sur</p>
     <h2>ANTONIO NATIONAL HIGH SCHOOL</h2>
-    <p>Ramon Magsaysay, Zamboanga del Sur · School ID: 303812</p>
+    <p>Ramon Magsaysay, Zamboanga del Sur · School ID: 303753</p>
     <div style="font-size:13px;font-weight:800;letter-spacing:1px;margin-top:8px;text-decoration:underline">EQUIPMENT BORROWER SLIP &amp; GATE PASS</div>
    </div>
 
@@ -1598,7 +1603,7 @@ function openRISSlipModal(requestId){
     <p>Republic of the Philippines · Department of Education</p>
     <p>Region IX, Zamboanga Peninsula · Schools Division of Zamboanga del Sur</p>
     <h2>ANTONIO NATIONAL HIGH SCHOOL</h2>
-    <p>Ramon Magsaysay, Zamboanga del Sur · School ID: 303812</p>
+    <p>Ramon Magsaysay, Zamboanga del Sur · School ID: 303753</p>
     <div style="font-size:13px;font-weight:800;letter-spacing:1px;margin-top:8px;text-decoration:underline">REQUISITION AND ISSUE SLIP (RIS)</div>
     <div style="font-size:11px;color:#555;font-style:italic;margin-top:2px">Appendix 63 · DepEd Standard Form</div>
    </div>

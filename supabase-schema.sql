@@ -356,11 +356,14 @@ end;
 $$;
 
 -- Secure RPC function allowing Developer / Admin to reset a user's password directly:
-create extension if not exists pgcrypto with schema extensions;
+create extension if not exists pgcrypto;
 
 create or replace function public.admin_reset_user_password(p_user_id uuid, p_new_password text)
 returns json language plpgsql security definer set search_path = public, auth, extensions
-as $$
+as $
+declare
+  v_salt text;
+  v_hash text;
 begin
   if not (public.current_user_role() in ('admin','developer')) then
     return json_build_object('success', false, 'error', 'Unauthorized: Admin or Developer only');
@@ -370,14 +373,22 @@ begin
     return json_build_object('success', false, 'error', 'Password must be at least 6 characters');
   end if;
 
+  begin
+    v_salt := extensions.gen_salt('bf');
+    v_hash := extensions.crypt(p_new_password, v_salt);
+  exception when undefined_function then
+    v_salt := public.gen_salt('bf');
+    v_hash := public.crypt(p_new_password, v_salt);
+  end;
+
   update auth.users
-  set encrypted_password = extensions.crypt(p_new_password, extensions.gen_salt('bf')),
+  set encrypted_password = v_hash,
       updated_at = now()
   where id = p_user_id;
 
   return json_build_object('success', true);
 end;
-$$;
+$;
 
 -- Note: to create the first administrator:
 -- 1. Create an account in Authentication > Users.
